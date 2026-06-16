@@ -1,0 +1,29 @@
+workflow PolicyGatedEdit {
+  input {
+    task: string
+    workspace: path
+  }
+
+  policy {
+    before fs.write(path) requires fs.read(path), user.confirm
+    deny fs.read(path) if not workspace.contains(path)
+    deny fs.write(path) if not workspace.contains(path)
+  }
+
+  stage @entry Analyze {
+    prompt: "Read only the files needed to propose a safe edit plan for the task."
+    output: {
+      plan: string
+    }
+    requires: fs.read
+  }
+
+  stage @exit Apply {
+    input: Analyze.plan
+    prompt: "Apply the approved plan and summarize the change."
+    output: {
+      summary: string
+    }
+    requires: fs.write
+  }
+}

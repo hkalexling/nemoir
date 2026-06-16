@@ -1,0 +1,46 @@
+workflow HintTutor {
+  input {
+    task: string
+    learner_code: string
+    failure_report: string
+  }
+
+  stage @entry Diagnose {
+    prompt: """
+      You are a Socratic programming tutor. Read the problem, learner code, and
+      any failure report. Identify the most likely bug and decide whether a
+      clarifying question is needed before giving a hint.
+    """
+    output: {
+      needs_clarify: bool { true => AskClarify false => Hint }
+      suspected_bug: string
+    }
+  }
+
+  stage AskClarify {
+    input: Diagnose.suspected_bug
+    prompt: "Ask one focused clarifying question. Do not reveal the solution."
+    output: {
+      clarification: string
+    }
+    requires: user.elicit
+  }
+
+  stage Hint {
+    input: Diagnose.suspected_bug, AskClarify.clarification?
+    prompt: "Give concise diagnostic points and one Socratic hint without revealing the fix."
+    output: {
+      key_points: string[]
+      hint: string
+    }
+  }
+
+  stage @exit Done {
+    input: Hint.hint, Hint.key_points
+    prompt: "Return the final hint and diagnostic key points."
+    output: {
+      hint: string
+      key_points: string[]
+    }
+  }
+}

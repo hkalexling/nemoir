@@ -1,0 +1,48 @@
+# Compatibility
+
+This page records the current compiler-side compatibility contract.
+
+## IR version
+
+The current Agent Workflow IR version is `0.1`.
+
+`nemo compile` lowers `.nemo` workflows to this IR and then validates that the result matches the expected IR structure and semantics.
+
+## Target outputs
+
+| Target | Generated output | Current compatibility notes |
+| --- | --- | --- |
+| `none` | No artifact | Useful for lowering and optional IR dumping only. |
+| `visualizer` | Standalone HTML file | No separate NemoIR runtime package is required for the generated HTML artifact. |
+| `python` | Python package | Generated `pyproject.toml` requires Python `>=3.11` and `nemoir-runtime>=0.9.2`. |
+| `web` | Vite/TypeScript app | Generated `package.json` uses `@nemoir/web-runtime` `^0.4.0` and `@nemoir/web-ui` `^0.2.0` by default. |
+
+## Web target compatibility
+
+The web backend is intentionally narrower than the IR.
+
+It accepts workflows that stay within the browser-oriented capability set used by the current compiler:
+
+- `user.elicit`
+- `user.confirm`
+- `http.fetch`
+- `browser.storage.read`
+- `browser.storage.write`
+- `browser.js.run`
+- `browser.js.sandbox`
+
+It rejects workflows that require unsupported capabilities such as `fs.read`, `fs.write`, or `os.shell`, and it rejects `path`-typed workflow inputs and outputs.
+
+`browser.js.run` and `browser.js.sandbox` are deterministic-stage-only capabilities on the web target. In addition, `browser.js.sandbox` requires an explicit approval policy of the form `before browser.js.sandbox(code) requires user.confirm`.
+
+## Example-level guidance
+
+The public examples reflect current target intent:
+
+- [`../examples/hello-workflow/`](../examples/hello-workflow/) is suitable for `visualizer`, `python`, and `web`.
+- [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) is Python-oriented and not web-compatible because it uses `path`, `fs.read`, and `fs.write`.
+- [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is web-compatible and also serves as a good frontend validation example.
+
+## Documentation boundaries
+
+This page records compiler-emitted dependency and compatibility facts. It does not duplicate runtime API documentation. When target-specific runtime docs are available, link to them from compiler docs rather than copying their package APIs here.

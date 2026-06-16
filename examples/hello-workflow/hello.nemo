@@ -1,0 +1,20 @@
+workflow HelloWorkflow {
+  input {
+    message: string
+  }
+
+  stage @entry Compose {
+    prompt: "Reply with a concise, friendly greeting for the user's message."
+    output: {
+      greeting: string
+    }
+  }
+
+  stage @exit Done {
+    input: Compose.greeting
+    prompt: "Return the greeting unchanged."
+    output: {
+      greeting: string
+    }
+  }
+}
