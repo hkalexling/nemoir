@@ -1,0 +1,311 @@
+use std::collections::HashSet;
+
+use indexmap::IndexMap;
+use nemoir_ir::*;
+
+use crate::ast::*;
+use crate::diagnostics::Diagnostic;
+use crate::resolve::ResolvedWorkflow;
+
+pub fn lower(
+    rw: &ResolvedWorkflow,
+    transitions: &[Vec<Transition>],
+    filename: &str,
+) -> Result<WorkflowIr, Diagnostic> {
+    let entry_stage = rw
+        .stages
+        .iter()
+        .find(|s| {
+            s.annotations
+                .iter()
+                .any(|a| matches!(a, StageAnnotation::Entry))
+        })
+        .expect("entry stage must exist");
+
+    let exit_stages: Vec<String> = rw
+        .stages
+        .iter()
+        .filter(|s| {
+            s.annotations
+                .iter()
+                .any(|a| matches!(a, StageAnnotation::Exit))
+        })
+        .map(|s| s.name.text.clone())
+        .collect();
+
+    let mut ir = WorkflowIr::new(filename, &rw.name.text, &entry_stage.name.text, exit_stages);
+
+    ir.inputs = rw
+        .inputs
+        .iter()
+        .map(|inp| Input {
+            id: inp.name.text.clone(),
+            ty: inp.ty.to_ir_string(),
+        })
+        .collect();
+
+    let mut cap_set: HashSet<String> = HashSet::new();
+    let mut cap_first_seen: Vec<String> = Vec::new();
+
+    for stage in &rw.stages {
+        for cap in &stage.requires {
+            let c = cap.text.clone();
+            if cap_set.insert(c.clone()) {
+                cap_first_seen.push(c);
+            }
+        }
+    }
+    for policy in &rw.policies {
+        let c = policy.trigger.capability.text.clone();
+        if cap_set.insert(c.clone()) {
+            cap_first_seen.push(c);
+        }
+        if let Some(ref requires) = policy.requires {
+            for req in requires {
+                let c = req.capability.text.clone();
+                if cap_set.insert(c.clone()) {
+                    cap_first_seen.push(c);
+                }
+            }
+        }
+    }
+    ir.capabilities = cap_first_seen;
+
+    ir.policies = rw.policies.iter().map(lower_policy).collect();
+
+    for (i, stage) in rw.stages.iter().enumerate() {
+        let node = lower_node(rw, stage, i, &transitions[i]);
+        ir.nodes.push(node);
+    }
+
+    Ok(ir)
+}
+
+fn lower_policy(p: &PolicyDecl) -> Policy {
+    let source_text = policy_source_text(p);
+    let kind = match p.kind {
+        PolicyKind::Before => "before".to_string(),
+        PolicyKind::Deny => "deny".to_string(),
+    };
+
+    let mut bind: IndexMap<String, BindArg> = IndexMap::new();
+    for arg in &p.trigger.args {
+        bind.insert(
+            arg.text.clone(),
+            BindArg {
+                kind: "arg".to_string(),
+                name: arg.text.clone(),
+            },
+        );
+    }
+
+    let trigger = Trigger {
+        capability: p.trigger.capability.text.clone(),
+        bind,
+    };
+
+    let requires = p.requires.as_ref().map(|reqs| {
+        reqs.iter()
+            .map(|r| {
+                let mut args: IndexMap<String, ArgValue> = IndexMap::new();
+                for arg in &r.args {
+                    args.insert(
+                        arg.text.clone(),
+                        ArgValue::Ref {
+                            r#ref: Ref::Bound {
+                                name: arg.text.clone(),
+                            },
+                        },
+                    );
+                }
+                RequiredCapability {
+                    capability: r.capability.text.clone(),
+                    args,
+                }
+            })
+            .collect()
+    });
+
+    let bound_names: HashSet<String> = p.trigger.args.iter().map(|a| a.text.clone()).collect();
+    let condition = p
+        .condition
+        .as_ref()
+        .map(|c| lower_policy_expr(c, &bound_names));
+
+    Policy {
+        id: source_text,
+        kind,
+        trigger,
+        requires,
+        condition,
+    }
+}
+
+fn policy_source_text(p: &PolicyDecl) -> String {
+    let trigger_args: Vec<String> = p.trigger.args.iter().map(|a| a.text.clone()).collect();
+    let trigger_str = format!("{}({})", p.trigger.capability.text, trigger_args.join(", "));
+
+    match p.kind {
+        PolicyKind::Before => {
+            let req_strs: Vec<String> = p
+                .requires
+                .as_ref()
+                .map(|reqs| {
+                    reqs.iter()
+                        .map(|r| {
+                            if r.args.is_empty() {
+                                r.capability.text.clone()
+                            } else {
+                                let args: Vec<String> =
+                                    r.args.iter().map(|a| a.text.clone()).collect();
+                                format!("{}({})", r.capability.text, args.join(", "))
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            format!("before {} requires {}", trigger_str, req_strs.join(", "))
+        }
+        PolicyKind::Deny => {
+            let cond = p
+                .condition
+                .as_ref()
+                .map(policy_expr_to_string)
+                .unwrap_or_default();
+            format!("deny {} if {}", trigger_str, cond)
+        }
+    }
+}
+
+fn policy_expr_to_string(expr: &PolicyExpr) -> String {
+    match expr {
+        PolicyExpr::Not { expr } => format!("not {}", policy_expr_to_string(expr)),
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| a.text.clone()).collect();
+            format!("{}.{}({})", receiver.text, method.text, arg_strs.join(", "))
+        }
+        PolicyExpr::Ref(id) => id.text.clone(),
+    }
+}
+
+fn classify_ref_name(name: &str, bound_names: &HashSet<String>) -> Ref {
+    if bound_names.contains(name) {
+        Ref::Bound {
+            name: name.to_string(),
+        }
+    } else {
+        Ref::Input {
+            name: name.to_string(),
+        }
+    }
+}
+
+fn lower_policy_expr(expr: &PolicyExpr, bound_names: &HashSet<String>) -> Expr {
+    match expr {
+        PolicyExpr::Not { expr } => Expr::Not {
+            expr: Box::new(lower_policy_expr(expr, bound_names)),
+        },
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: classify_ref_name(&receiver.text, bound_names),
+            }),
+            method: method.text.clone(),
+            args: args
+                .iter()
+                .map(|a| Expr::Ref {
+                    r#ref: classify_ref_name(&a.text, bound_names),
+                })
+                .collect(),
+        },
+        PolicyExpr::Ref(id) => Expr::Ref {
+            r#ref: classify_ref_name(&id.text, bound_names),
+        },
+    }
+}
+
+fn lower_node(
+    rw: &ResolvedWorkflow,
+    stage: &crate::resolve::ResolvedStage,
+    _stage_idx: usize,
+    transitions: &[Transition],
+) -> Node {
+    let is_entry = stage
+        .annotations
+        .iter()
+        .any(|a| matches!(a, StageAnnotation::Entry));
+    let is_exit = stage
+        .annotations
+        .iter()
+        .any(|a| matches!(a, StageAnnotation::Exit));
+
+    let mut annotations: Vec<String> = Vec::new();
+    if is_entry {
+        annotations.push("entry".to_string());
+    }
+    if is_exit {
+        annotations.push("exit".to_string());
+    }
+
+    let mut reads: Vec<Read> = Vec::new();
+
+    // Entry stage implicitly reads all workflow inputs
+    if is_entry {
+        for inp in &rw.inputs {
+            reads.push(Read {
+                ref_: Ref::Input {
+                    name: inp.name.text.clone(),
+                },
+                optional: false,
+                origin: "implicit_entry_input".to_string(),
+            });
+        }
+    }
+
+    // DSL stage inputs
+    for input_ref in &stage.inputs {
+        reads.push(Read {
+            ref_: Ref::NodeOutput {
+                node: input_ref.stage.text.clone(),
+                field: input_ref.field.text.clone(),
+            },
+            optional: input_ref.optional,
+            origin: "dsl_stage_input".to_string(),
+        });
+    }
+
+    let writes: Vec<Write> = stage
+        .outputs
+        .iter()
+        .map(|f| Write {
+            name: f.name.text.clone(),
+            ty: f.ty.to_ir_string(),
+            optional: f.ty.optional,
+        })
+        .collect();
+
+    let requires: Vec<StageCapability> = stage
+        .requires
+        .iter()
+        .map(|c| StageCapability {
+            capability: c.text.clone(),
+        })
+        .collect();
+
+    Node {
+        id: stage.name.text.clone(),
+        annotations,
+        prompt: stage.prompt.value.clone(),
+        reads,
+        writes,
+        requires,
+        transitions: transitions.to_vec(),
+    }
+}

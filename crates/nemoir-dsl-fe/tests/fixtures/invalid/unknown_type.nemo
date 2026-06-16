@@ -1,0 +1,11 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "hello"
+    output: {
+      x: unknown_type
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+  }
+}

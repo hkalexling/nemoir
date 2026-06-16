@@ -1,0 +1,5 @@
+workflow Test {
+  stage@exit Fin {
+    prompt: "done"
+  }
+}

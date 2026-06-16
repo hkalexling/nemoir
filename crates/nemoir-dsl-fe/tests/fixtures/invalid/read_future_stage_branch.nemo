@@ -1,0 +1,35 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      ok: bool {
+        true => Producer
+        false => Consumer
+      }
+    }
+  }
+  stage Producer {
+    prompt: "producer"
+    output: {
+      out: string
+      ok: bool {
+        true => Fin
+        false => Fin
+      }
+    }
+  }
+  stage Consumer {
+    prompt: "consumer"
+    input: Producer.out
+    output: {
+      done: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Producer.out?, Consumer.done?
+    output: {
+      summary: string
+    }
+  }
+}

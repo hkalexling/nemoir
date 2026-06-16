@@ -1,0 +1,9 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "hello"
+    requires: cap
+    output: {
+      x: string
+    }
+  }
+}

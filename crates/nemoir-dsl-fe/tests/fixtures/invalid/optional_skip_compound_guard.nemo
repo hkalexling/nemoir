@@ -1,0 +1,36 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "hello"
+    input: A.opt1?
+    output: {
+      x: string
+    }
+  }
+  stage A {
+    prompt: "a"
+    input: Start.x
+    output: {
+      opt1: string?
+    }
+  }
+  stage B {
+    prompt: "b"
+    input: A.opt1?
+    output: {
+      opt2: string?
+    }
+  }
+  stage Next {
+    prompt: "next"
+    input: A.opt1, B.opt2
+    output: {
+      out: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    output: {
+      summary: string
+    }
+  }
+}

@@ -1,0 +1,28 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      ok: bool {
+        true => A
+        false => Fin
+      }
+      retry: bool {
+        true => B
+        false => Fin
+      }
+    }
+  }
+  stage A {
+    prompt: "a"
+    output: { x: string }
+  }
+  stage B {
+    prompt: "b"
+    output: { x: string }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.ok
+    output: { summary: string }
+  }
+}

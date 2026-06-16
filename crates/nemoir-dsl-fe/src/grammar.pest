@@ -1,0 +1,120 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ ("\n" | EOI) }
+
+workflow = {
+    SOI ~
+    "workflow" ~ ident ~ "{" ~
+    input_block? ~
+    policy_block? ~
+    stage* ~
+    "}" ~
+    EOI
+}
+
+ident = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+dotted_ident = @{ ident ~ ("." ~ ident)* }
+
+type_base = { ident }
+
+array_marker = { "[]" }
+optional_marker = { "?" }
+
+type_ref = {
+    type_base ~ array_marker? ~ optional_marker?
+}
+
+input_block = {
+    "input" ~ "{" ~
+    input_field* ~
+    "}"
+}
+
+input_field = { ident ~ ":" ~ type_ref }
+
+policy_block = {
+    "policy" ~ "{" ~
+    (before_policy | deny_policy)* ~
+    "}"
+}
+
+before_policy = {
+    "before" ~ cap_call ~ "requires" ~ require_list
+}
+
+deny_policy = {
+    "deny" ~ cap_call ~ "if" ~ policy_expr
+}
+
+cap_call = {
+    dotted_ident ~ "(" ~ ident ~ ("," ~ ident)* ~ ")"
+}
+
+require_list = {
+    require_item ~ ("," ~ require_item)*
+}
+
+require_item = {
+    dotted_ident ~ ("(" ~ ident ~ ("," ~ ident)* ~ ")")?
+}
+
+not_kw = { "not" }
+dot = { "." }
+
+policy_expr = {
+    not_kw? ~
+    ident ~
+    (dot ~ ident ~ "(" ~ (ident ~ ("," ~ ident)*)? ~ ")")?
+}
+
+stage = {
+    "stage" ~ annotation? ~ ident ~ "{" ~
+    stage_body_item* ~
+    "}"
+}
+
+annotation = @{ "@" ~ ident }
+
+stage_body_item = {
+    prompt_decl | stage_input | output_block | requires_block
+}
+
+prompt_decl = {
+    "prompt" ~ ":" ~ string
+}
+
+stage_input = {
+    "input" ~ ":" ~ input_ref ~ ("," ~ input_ref)*
+}
+
+input_ref = {
+    ident ~ "." ~ ident ~ optional_marker?
+}
+
+output_block = {
+    "output" ~ ":" ~ "{" ~
+    output_field* ~
+    "}"
+}
+
+output_field = {
+    ident ~ ":" ~ type_ref ~ bool_branches?
+}
+
+bool_branches = {
+    "{" ~ "true" ~ "=>" ~ ident ~ "false" ~ "=>" ~ ident ~ "}"
+}
+
+requires_block = {
+    "requires" ~ ":" ~ dotted_ident ~ ("," ~ dotted_ident)*
+}
+
+string = { multiline_string | single_line_string }
+
+single_line_string = @{
+    "\"" ~ ( "\\\"" | !("\"" | "\n" | "\r") ~ ANY )* ~ "\""
+}
+
+multiline_string = @{
+    "\"\"\"" ~ ( !"\"\"\"" ~ ANY )* ~ "\"\"\""
+}

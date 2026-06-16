@@ -1,0 +1,16 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      ok: bool? {
+        true => Fin
+        false => Fin
+      }
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.ok
+    output: { summary: string }
+  }
+}

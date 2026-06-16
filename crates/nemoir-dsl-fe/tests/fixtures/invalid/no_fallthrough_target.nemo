@@ -1,0 +1,14 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      x: string
+    }
+  }
+  stage NoExitForward {
+    prompt: "I have nowhere to go"
+    output: {
+      y: string
+    }
+  }
+}

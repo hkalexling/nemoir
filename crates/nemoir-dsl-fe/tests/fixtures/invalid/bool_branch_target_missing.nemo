@@ -1,0 +1,14 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "hello"
+    output: {
+      ok: bool {
+        true => MissingTarget
+        false => Fin
+      }
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+  }
+}

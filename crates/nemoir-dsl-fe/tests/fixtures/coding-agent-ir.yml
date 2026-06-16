@@ -1,0 +1,438 @@
+# The DSL and IR only constrain required capabilities. Exact tools are NOT
+# listed here. The compiler generates a runtime library that expects a tool
+# registry at initialization. The caller provides tool implementations that
+# satisfy the required capabilities. If a required capability has no registered
+# tool at init, the runtime raises an error immediately.
+#
+# This separates workflow specification from tool implementation: the same IR
+# can be deployed with different tool sets for different environments.
+#
+# ---------------------------------------------------------------------------
+# Transition inference rules (applied in priority order, first match wins)
+# ---------------------------------------------------------------------------
+#
+# Rule 1 -- Bool branch
+#   Signal:  Output field typed `bool { true => X, false => Y }`
+#   Effect:  Two guarded transitions on the field value.
+#   Example: Propose (ok: true => Apply, false => Plan)
+#            Verify  (ok: true => Fin,   false => Plan)
+#
+# Rule 2 -- Backward-reference loop
+#   Signal:  A textually-prior stage P declares an input referencing an output
+#            of the current stage S. This backward data-flow edge implies a
+#            loop: S transitions back to P.
+#   Guard:   always (unconditional)
+#   Ambiguity: If multiple prior stages reference S's output, the compiler
+#              must error and require an explicit `=> Target` on S.
+#   Example: Clarify -> Triage (Triage reads Clarify.answers?)
+#
+# Rule 3 -- Optional-skip
+#   Signal:  The textually-next stage N has a non-optional input that
+#            references an optional output from a prior stage.
+#   Effect:  Two guarded transitions:
+#              priority 0: go to N,    guard has_value(optional_ref)
+#              priority 1: skip to N+1, guard missing(optional_ref)
+#   Example: Triage -> Clarify / Plan  (on Triage.unclear_points?)
+#            Apply  -> Verify  / Fin   (on Plan.verification_plan?)
+#
+# Rule 4 -- Fallthrough
+#   Signal:  None of the above apply.
+#   Effect:  Unconditional transition to the next stage in textual order.
+#   Example: Plan -> Propose
+#
+# The four rules are mutually exclusive per stage: a stage matches exactly
+# one rule. If a stage has bool branches, those define all its transitions.
+# Otherwise the compiler checks for backward refs, then optional-skip, then
+# falls through.
+# ---------------------------------------------------------------------------
+
+ir_version: "0.1"
+kind: workflow_ir
+
+source:
+  frontend: nemo_dsl
+  file: coding-agent.nemo
+
+workflow:
+  id: CodingAgent
+  entry: Triage
+  exits:
+    - Fin
+  transition_semantics:
+    selection: first_match_by_priority
+    no_match: error_unless_exit
+
+inputs:
+  - id: task
+    type: string
+  - id: cwd
+    type: path
+
+capabilities:
+  - fs.read
+  - user.elicit
+  - user.confirm
+  - fs.write
+  - os.shell
+
+policies:
+  - id: "before fs.write(path) requires fs.read(path), user.confirm"
+    kind: before
+    trigger:
+      capability: fs.write
+      bind:
+        path:
+          kind: arg
+          name: path
+    requires:
+      - capability: fs.read
+        args:
+          path:
+            kind: ref
+            ref:
+              kind: bound
+              name: path
+      - capability: user.confirm
+
+  - id: "deny fs.read(path) if not cwd.contains(path)"
+    kind: deny
+    trigger:
+      capability: fs.read
+      bind:
+        path:
+          kind: arg
+          name: path
+    condition:
+      kind: not
+      expr:
+        kind: method_call
+        receiver:
+          kind: ref
+          ref:
+            kind: input
+            name: cwd
+        method: contains
+        args:
+          - kind: ref
+            ref:
+              kind: bound
+              name: path
+
+  - id: "deny fs.write(path) if not cwd.contains(path)"
+    kind: deny
+    trigger:
+      capability: fs.write
+      bind:
+        path:
+          kind: arg
+          name: path
+    condition:
+      kind: not
+      expr:
+        kind: method_call
+        receiver:
+          kind: ref
+          ref:
+            kind: input
+            name: cwd
+        method: contains
+        args:
+          - kind: ref
+            ref:
+              kind: bound
+              name: path
+
+nodes:
+  - id: Triage
+    annotations:
+      - entry
+    prompt: "Understand user request. Ground your understanding to the codebase."
+    reads:
+      - ref:
+          kind: input
+          name: task
+        optional: false
+        origin: implicit_entry_input
+      - ref:
+          kind: input
+          name: cwd
+        optional: false
+        origin: implicit_entry_input
+      - ref:
+          kind: node_output
+          node: Clarify
+          field: answers
+        optional: true
+        origin: dsl_stage_input
+    writes:
+      - name: summary
+        type: string
+        optional: false
+      - name: unclear_points
+        type: string[]
+        optional: true
+    requires:
+      - capability: fs.read
+    transitions:
+      - to: Clarify
+        priority: 0
+        reason: next_stage_required_input_available
+        guard:
+          kind: has_value
+          ref:
+            kind: node_output
+            node: Triage
+            field: unclear_points
+      - to: Plan
+        priority: 1
+        reason: skip_next_stage_required_input_missing
+        guard:
+          kind: missing
+          ref:
+            kind: node_output
+            node: Triage
+            field: unclear_points
+
+  - id: Clarify
+    annotations: []
+    prompt: "Clarify unclear points. Reference specific files and lines if applicable."
+    reads:
+      - ref:
+          kind: node_output
+          node: Triage
+          field: unclear_points
+        optional: false
+        origin: dsl_stage_input
+    writes:
+      - name: answers
+        type: string[]
+        optional: false
+    requires:
+      - capability: user.elicit
+    transitions:
+      - to: Triage
+        priority: 0
+        reason: backward_ref_loop
+        guard:
+          kind: always
+
+  - id: Plan
+    annotations: []
+    prompt: "Plan the changes. Reference specific files and lines if applicable.\nInclude all necessary details and context so this can be handed off to another agent"
+    reads:
+      - ref:
+          kind: node_output
+          node: Triage
+          field: summary
+        optional: false
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Clarify
+          field: answers
+        optional: true
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Propose
+          field: comments
+        optional: true
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Verify
+          field: summary
+        optional: true
+        origin: dsl_stage_input
+    writes:
+      - name: plan
+        type: string
+        optional: false
+      - name: verification_plan
+        type: string
+        optional: true
+    requires:
+      - capability: fs.read
+    transitions:
+      - to: Propose
+        priority: 0
+        reason: fallthrough
+        guard:
+          kind: always
+
+  - id: Propose
+    annotations: []
+    prompt: "Propose the plan for user confirmation. Reference specific files and lines if applicable.\nInclude all necessary details and context so this can be handed off to another agent"
+    reads:
+      - ref:
+          kind: node_output
+          node: Plan
+          field: plan
+        optional: false
+        origin: dsl_stage_input
+    writes:
+      - name: ok
+        type: bool
+        optional: false
+      - name: comments
+        type: string
+        optional: true
+    requires:
+      - capability: user.elicit
+      - capability: user.confirm
+    transitions:
+      - to: Apply
+        priority: 0
+        reason: output_branch_true
+        guard:
+          kind: eq
+          left:
+            kind: ref
+            ref:
+              kind: node_output
+              node: Propose
+              field: ok
+          right:
+            kind: literal
+            type: bool
+            value: true
+      - to: Plan
+        priority: 1
+        reason: output_branch_false
+        guard:
+          kind: eq
+          left:
+            kind: ref
+            ref:
+              kind: node_output
+              node: Propose
+              field: ok
+          right:
+            kind: literal
+            type: bool
+            value: false
+
+  - id: Apply
+    annotations: []
+    prompt: "Apply the user confirmed plan. Follow the plan exactly and do not deviate."
+    reads:
+      - ref:
+          kind: node_output
+          node: Plan
+          field: plan
+        optional: false
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Propose
+          field: comments
+        optional: true
+        origin: dsl_stage_input
+    writes:
+      - name: summary
+        type: string
+        optional: false
+    requires:
+      - capability: fs.read
+      - capability: fs.write
+      - capability: os.shell
+    transitions:
+      - to: Verify
+        priority: 0
+        reason: next_stage_required_input_available
+        guard:
+          kind: has_value
+          ref:
+            kind: node_output
+            node: Plan
+            field: verification_plan
+      - to: Fin
+        priority: 1
+        reason: skip_next_stage_required_input_missing
+        guard:
+          kind: missing
+          ref:
+            kind: node_output
+            node: Plan
+            field: verification_plan
+
+  - id: Verify
+    annotations: []
+    prompt: "Verify the changes. Follow the verification plan exactly and do not deviate."
+    reads:
+      - ref:
+          kind: node_output
+          node: Apply
+          field: summary
+        optional: false
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Plan
+          field: verification_plan
+        optional: false
+        origin: dsl_stage_input
+    writes:
+      - name: ok
+        type: bool
+        optional: false
+      - name: summary
+        type: string
+        optional: false
+    requires:
+      - capability: os.shell
+    transitions:
+      - to: Fin
+        priority: 0
+        reason: output_branch_true
+        guard:
+          kind: eq
+          left:
+            kind: ref
+            ref:
+              kind: node_output
+              node: Verify
+              field: ok
+          right:
+            kind: literal
+            type: bool
+            value: true
+      - to: Plan
+        priority: 1
+        reason: output_branch_false
+        guard:
+          kind: eq
+          left:
+            kind: ref
+            ref:
+              kind: node_output
+              node: Verify
+              field: ok
+          right:
+            kind: literal
+            type: bool
+            value: false
+
+  - id: Fin
+    annotations:
+      - exit
+    prompt: "Summarize the changes made. Reference specific files and lines if applicable."
+    reads:
+      - ref:
+          kind: node_output
+          node: Apply
+          field: summary
+        optional: false
+        origin: dsl_stage_input
+      - ref:
+          kind: node_output
+          node: Verify
+          field: summary
+        optional: true
+        origin: dsl_stage_input
+    writes:
+      - name: summary
+        type: string
+        optional: false
+    requires: []
+    transitions: []

@@ -1,0 +1,92 @@
+workflow CodingAgent {
+  input {
+    task: string
+    cwd: path
+  }
+
+  policy {
+    before fs.write(path) requires fs.read(path), user.confirm
+    deny fs.read(path) if not cwd.contains(path)
+    deny fs.write(path) if not cwd.contains(path)
+  }
+
+  stage@entry Triage {
+    prompt: "Understand user request. Ground your understanding to the codebase."
+    input: Clarify.answers?
+    output: {
+      summary: string
+      unclear_points: string[]?
+    }
+    requires: fs.read
+  }
+
+  stage Clarify {
+    prompt: "Clarify unclear points. Reference specific files and lines if applicable."
+    // note: unclear_points is not marked as optional, so Clarify only runs if unclear_points is not null
+    input: Triage.unclear_points
+    output: {
+      answers: string[]
+    }
+    requires: user.elicit
+  }
+
+  stage Plan {
+    prompt: """
+      Plan the changes. Reference specific files and lines if applicable.
+      Include all necessary details and context so this can be handed off to another agent
+    """
+    input: Triage.summary, Clarify.answers?, Propose.comments?, Verify.summary?
+    output: {
+      plan: string
+      verification_plan: string?
+    }
+    requires: fs.read
+  }
+
+  stage Propose {
+    prompt: """
+      Propose the plan for user confirmation. Reference specific files and lines if applicable.
+      Include all necessary details and context so this can be handed off to another agent
+    """
+    input: Plan.plan
+    output: {
+      ok: bool {
+        true => Apply
+        false => Plan
+      }
+      comments: string?
+    }
+    requires: user.elicit, user.confirm
+  }
+
+  stage Apply {
+    prompt: "Apply the user confirmed plan. Follow the plan exactly and do not deviate."
+    input: Plan.plan, Propose.comments?
+    output: {
+      summary: string
+    }
+    requires: fs.read, fs.write, os.shell
+  }
+
+  stage Verify {
+    prompt: "Verify the changes. Follow the verification plan exactly and do not deviate."
+    // note: verification_plan is not marked as optional, so Verify only runs if verification_plan is not null
+    input: Apply.summary, Plan.verification_plan
+    output: {
+      ok: bool {
+        true => Fin
+        false => Plan
+      }
+      summary: string
+    }
+    requires: os.shell
+  }
+
+  stage@exit Fin {
+    prompt: "Summarize the changes made. Reference specific files and lines if applicable."
+    input: Apply.summary, Verify.summary?
+    output: {
+      summary: string
+    }
+  }
+}

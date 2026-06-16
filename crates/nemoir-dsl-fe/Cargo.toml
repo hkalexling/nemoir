@@ -1,0 +1,15 @@
+[package]
+name = "nemoir-dsl-fe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pest = "2"
+pest_derive = "2"
+miette = { version = "7", features = ["fancy"] }
+thiserror = "2"
+indexmap = "2"
+serde_yaml = "0.9"
+strsim = "0.11"
+nemoir-ir = { path = "../nemoir-ir" }

@@ -1,0 +1,14 @@
+workflow Test {
+  input {
+    maybe: string?
+  }
+  stage@entry Start {
+    prompt: "start"
+    output: { out: string }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.out
+    output: { summary: string }
+  }
+}

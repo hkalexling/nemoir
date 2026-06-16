@@ -1,0 +1,150 @@
+#[cfg(test)]
+mod tests {
+    use crate::parse;
+
+    #[test]
+    fn test_parse_simple_workflow() {
+        let input = r#"workflow Test {
+  input {
+    x: string
+  }
+  policy {
+    deny fs.read(path) if not cwd.contains(path)
+  }
+  stage@entry Hello {
+    prompt: "Hello world"
+    input: World.field?
+    output: {
+      x: string
+      ok: bool {
+        true => Fin
+        false => Hello
+      }
+    }
+    requires: fs.read, user.confirm
+  }
+  stage@exit Fin {
+    prompt: "done"
+    output: {
+      summary: string
+    }
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        assert_eq!(ast.name.text, "Test");
+        assert_eq!(ast.inputs.len(), 1, "should have 1 workflow input");
+        assert_eq!(ast.policies.len(), 1, "should have 1 policy");
+        assert_eq!(ast.stages.len(), 2, "should have 2 stages");
+
+        let entry = &ast.stages[0];
+        assert_eq!(entry.name.text, "Hello");
+        assert!(
+            entry
+                .annotations
+                .iter()
+                .any(|a| matches!(a, crate::ast::StageAnnotation::Entry)),
+            "Hello should be @entry"
+        );
+        assert_eq!(entry.items.len(), 4, "Hello should have 4 body items");
+
+        let exit = &ast.stages[1];
+        assert_eq!(exit.name.text, "Fin");
+        assert!(
+            exit.annotations
+                .iter()
+                .any(|a| matches!(a, crate::ast::StageAnnotation::Exit)),
+            "Fin should be @exit"
+        );
+    }
+
+    #[test]
+    fn test_parse_coding_agent() {
+        let input = include_str!("../tests/fixtures/coding-agent.nemo");
+        let ast =
+            parse::parse_source(input, "coding-agent.nemo").expect("should parse coding-agent");
+        assert_eq!(ast.stages.len(), 7, "coding-agent has 7 stages");
+        assert_eq!(ast.inputs.len(), 2);
+        assert_eq!(ast.policies.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_multiline_prompt() {
+        let input = r#"workflow Test {
+  stage S {
+    prompt: """
+line 1
+line 2"""
+    output: { x: string }
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        let stage = &ast.stages[0];
+        for item in &stage.items {
+            if let crate::ast::StageBodyItem::Prompt(s) = item {
+                assert!(
+                    s.value.contains('\n'),
+                    "multiline prompt should contain newline"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_input_ref() {
+        let input = r#"workflow Test {
+  stage S {
+    prompt: "x"
+    input: Other.field?
+    output: { x: string }
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        let stage = &ast.stages[0];
+        for item in &stage.items {
+            if let crate::ast::StageBodyItem::Input(refs) = item {
+                assert_eq!(refs.len(), 1);
+                assert!(refs[0].optional, "input ref should be optional");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_output() {
+        let input = r#"workflow Test {
+  stage S {
+    prompt: "x"
+    output: {
+      val: string?
+    }
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        let stage = &ast.stages[0];
+        for item in &stage.items {
+            if let crate::ast::StageBodyItem::Output(fields) = item {
+                assert_eq!(fields.len(), 1);
+                assert!(fields[0].ty.optional, "output type should be optional");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_array_type() {
+        let input = r#"workflow Test {
+  stage S {
+    prompt: "x"
+    output: {
+      items: string[]
+    }
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        let stage = &ast.stages[0];
+        for item in &stage.items {
+            if let crate::ast::StageBodyItem::Output(fields) = item {
+                assert_eq!(fields.len(), 1);
+                assert!(fields[0].ty.is_array, "output type should be array");
+            }
+        }
+    }
+}

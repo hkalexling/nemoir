@@ -1,0 +1,12 @@
+workflow Test {
+  stage@entry Start {
+    prompt: "hello"
+    input: UnknownStage.field
+    output: {
+      x: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+  }
+}

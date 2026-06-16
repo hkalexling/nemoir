@@ -1,0 +1,446 @@
+use pest::Parser;
+use pest_derive::Parser;
+
+use crate::ast::*;
+use crate::diagnostics::{Diagnostic, ParseError};
+
+#[derive(Parser)]
+#[grammar = "grammar.pest"]
+pub struct NemoParser;
+
+pub fn parse_source(source: &str, filename: &str) -> Result<WorkflowAst, Diagnostic> {
+    let pairs = NemoParser::parse(Rule::workflow, source).map_err(|err| {
+        let (start, end) = match err.location {
+            pest::error::InputLocation::Pos(p) => (p, p + 1),
+            pest::error::InputLocation::Span((s, e)) => (s, e),
+        };
+        let msg = match err.variant {
+            pest::error::ErrorVariant::ParsingError {
+                positives,
+                negatives: _,
+            } => {
+                let expected: Vec<&str> = positives
+                    .iter()
+                    .map(|r| match r {
+                        Rule::string => "a quoted string",
+                        Rule::ident => "an identifier",
+                        Rule::dotted_ident => "a capability name",
+                        Rule::type_base => "a type (string, bool, path)",
+                        Rule::input_block => "input { ... }",
+                        Rule::input_field => "an input field (name: type)",
+                        Rule::policy_block => "policy { ... }",
+                        Rule::policy_expr => "a policy condition",
+                        Rule::stage => "stage declaration",
+                        Rule::stage_body_item => "prompt:, input:, output:, or requires:",
+                        Rule::prompt_decl => "prompt:",
+                        Rule::stage_input => "input:",
+                        Rule::input_ref => "stage field reference like Stage.field",
+                        Rule::output_block => "output: { ... }",
+                        Rule::output_field => "an output field (name: type)",
+                        Rule::requires_block => "requires:",
+                        Rule::bool_branches => "{ true => X false => Y }",
+                        Rule::before_policy => "before policy",
+                        Rule::deny_policy => "deny policy",
+                        Rule::cap_call => "a capability call",
+                        Rule::require_item => "a required capability",
+                        Rule::annotation => "@entry or @exit annotation",
+                        Rule::workflow => "workflow",
+                        _ => "unknown token",
+                    })
+                    .collect();
+                if expected.is_empty() {
+                    "unexpected token".to_string()
+                } else {
+                    format!("expected {}", expected.join(" or "))
+                }
+            }
+            pest::error::ErrorVariant::CustomError { message } => message,
+        };
+        let label_msg = format!("{} {}", "here", &msg);
+        Diagnostic::ParseError(ParseError {
+            message: format!("parse error: {}", msg),
+            filename: filename.to_string(),
+            label: Some((start, end, label_msg)),
+            help: None,
+        })
+    })?;
+
+    let workflow_pair = pairs.into_iter().next().unwrap();
+    parse_workflow(workflow_pair)
+}
+
+fn parse_workflow(pair: pest::iterators::Pair<Rule>) -> Result<WorkflowAst, Diagnostic> {
+    let mut inner = pair.into_inner();
+
+    let name = parse_ident(inner.next().expect("workflow name"));
+
+    let mut inputs = Vec::new();
+    let mut policies = Vec::new();
+    let mut stages = Vec::new();
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::input_block => {
+                inputs = parse_input_block(item)?;
+            }
+            Rule::policy_block => {
+                policies = parse_policy_block(item)?;
+            }
+            Rule::stage => {
+                stages.push(parse_stage(item)?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(WorkflowAst {
+        name,
+        inputs,
+        policies,
+        stages,
+    })
+}
+
+fn parse_ident(pair: pest::iterators::Pair<Rule>) -> Ident {
+    let span = pair.as_span();
+    Ident {
+        text: pair.as_str().to_string(),
+        span: Span::new(span.start(), span.end()),
+    }
+}
+
+fn span_from_pair(pair: &pest::iterators::Pair<Rule>) -> Span {
+    let s = pair.as_span();
+    Span::new(s.start(), s.end())
+}
+
+fn parse_type_ref(pair: pest::iterators::Pair<Rule>) -> TypeRef {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+
+    let base_pair = inner.next().expect("type base");
+    let raw_name = base_pair.as_str().to_string();
+    let base = BaseType::from_name(&raw_name);
+
+    let mut is_array = false;
+    let mut optional = false;
+
+    for p in inner {
+        match p.as_rule() {
+            Rule::array_marker => is_array = true,
+            Rule::optional_marker => optional = true,
+            _ => {}
+        }
+    }
+
+    TypeRef {
+        base,
+        is_array,
+        optional,
+        span,
+        raw_name,
+    }
+}
+
+fn parse_input_block(pair: pest::iterators::Pair<Rule>) -> Result<Vec<InputDecl>, Diagnostic> {
+    let mut inputs = Vec::new();
+    for field in pair.into_inner() {
+        if field.as_rule() == Rule::input_field {
+            let mut inner = field.into_inner();
+            let name = parse_ident(inner.next().expect("input field name"));
+            let ty = parse_type_ref(inner.next().expect("input field type"));
+            inputs.push(InputDecl { name, ty });
+        }
+    }
+    Ok(inputs)
+}
+
+fn parse_policy_block(pair: pest::iterators::Pair<Rule>) -> Result<Vec<PolicyDecl>, Diagnostic> {
+    let mut policies = Vec::new();
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::before_policy => {
+                policies.push(parse_before_policy(item));
+            }
+            Rule::deny_policy => {
+                policies.push(parse_deny_policy(item));
+            }
+            _ => {}
+        }
+    }
+    Ok(policies)
+}
+
+fn parse_cap_call(pair: pest::iterators::Pair<Rule>) -> CapCall {
+    let mut inner = pair.into_inner();
+    let capability = parse_ident(inner.next().expect("capability name"));
+    let mut args = Vec::new();
+    for arg in inner {
+        args.push(parse_ident(arg));
+    }
+    CapCall { capability, args }
+}
+
+fn parse_require_item(pair: pest::iterators::Pair<Rule>) -> RequireItem {
+    let mut inner = pair.into_inner();
+    let capability = parse_ident(inner.next().expect("require capability"));
+    let mut args = Vec::new();
+    for arg in inner {
+        args.push(parse_ident(arg));
+    }
+    RequireItem { capability, args }
+}
+
+fn parse_before_policy(pair: pest::iterators::Pair<Rule>) -> PolicyDecl {
+    let mut inner = pair.into_inner();
+    let trigger = parse_cap_call(inner.next().expect("trigger cap_call"));
+
+    let mut requires = Vec::new();
+    for item in inner {
+        if item.as_rule() == Rule::require_list {
+            for req in item.into_inner() {
+                requires.push(parse_require_item(req));
+            }
+        }
+    }
+
+    PolicyDecl {
+        kind: PolicyKind::Before,
+        trigger,
+        requires: Some(requires),
+        condition: None,
+    }
+}
+
+fn parse_policy_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let inner = pair.into_inner();
+    let mut has_not = false;
+
+    let items: Vec<_> = inner.collect();
+
+    let mut idx = 0;
+
+    if idx < items.len() && items[idx].as_rule() == Rule::not_kw {
+        has_not = true;
+        idx += 1;
+    }
+
+    let receiver = parse_ident(items[idx].clone());
+    idx += 1;
+
+    let mut method_call = None;
+
+    while idx < items.len() {
+        if items[idx].as_rule() == Rule::dot {
+            idx += 1;
+            let method = parse_ident(items[idx].clone());
+            idx += 1;
+            let mut args = Vec::new();
+            while idx < items.len() {
+                args.push(parse_ident(items[idx].clone()));
+                idx += 1;
+            }
+            method_call = Some((method, args));
+        } else {
+            idx += 1;
+        }
+    }
+
+    let base = if let Some((method, args)) = method_call {
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        }
+    } else {
+        PolicyExpr::Ref(receiver)
+    };
+
+    if has_not {
+        PolicyExpr::Not {
+            expr: Box::new(base),
+        }
+    } else {
+        base
+    }
+}
+
+fn parse_deny_policy(pair: pest::iterators::Pair<Rule>) -> PolicyDecl {
+    let mut inner = pair.into_inner();
+    let trigger = parse_cap_call(inner.next().expect("trigger cap_call"));
+    let condition = parse_policy_expr(inner.next().expect("condition"));
+
+    PolicyDecl {
+        kind: PolicyKind::Deny,
+        trigger,
+        requires: None,
+        condition: Some(condition),
+    }
+}
+
+fn parse_stage(pair: pest::iterators::Pair<Rule>) -> Result<StageDecl, Diagnostic> {
+    let mut inner = pair.into_inner();
+
+    let mut annotations = Vec::new();
+
+    let first = inner.next().expect("stage name or annotation");
+
+    let name = if first.as_rule() == Rule::annotation {
+        match first.as_str() {
+            "@entry" => annotations.push(StageAnnotation::Entry),
+            "@exit" => annotations.push(StageAnnotation::Exit),
+            _other => {
+                let s = span_from_pair(&first);
+                return Err(Diagnostic::ParseError(ParseError {
+                    message: format!("unknown stage annotation: {}", _other),
+                    filename: String::new(),
+                    label: Some((s.start, s.end, format!("unknown annotation `{}`", _other))),
+                    help: None,
+                }));
+            }
+        }
+        parse_ident(inner.next().expect("stage name after annotation"))
+    } else {
+        parse_ident(first)
+    };
+
+    let mut items = Vec::new();
+
+    for item in inner {
+        if item.as_rule() != Rule::stage_body_item {
+            continue;
+        }
+        let body_item = item.into_inner().next().unwrap();
+        match body_item.as_rule() {
+            Rule::prompt_decl => {
+                let mut p_inner = body_item.into_inner();
+                let s = p_inner.next().expect("prompt string");
+                let raw = s.as_str();
+                let processed = process_string(raw);
+                let span = span_from_pair(&s);
+                items.push(StageBodyItem::Prompt(Spanned::new(processed, span)));
+            }
+            Rule::stage_input => {
+                let inputs = parse_stage_input(body_item);
+                items.push(StageBodyItem::Input(inputs));
+            }
+            Rule::output_block => {
+                let outputs = parse_output_block(body_item)?;
+                items.push(StageBodyItem::Output(outputs));
+            }
+            Rule::requires_block => {
+                let requires = parse_requires_block(body_item);
+                items.push(StageBodyItem::Requires(requires));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(StageDecl {
+        name,
+        annotations,
+        items,
+    })
+}
+
+fn parse_stage_input(pair: pest::iterators::Pair<Rule>) -> Vec<StageInputRef> {
+    let mut refs = Vec::new();
+    for item in pair.into_inner() {
+        if item.as_rule() == Rule::input_ref {
+            let span = span_from_pair(&item);
+            let mut inner = item.into_inner();
+            let stage = parse_ident(inner.next().expect("stage in input ref"));
+            let field = parse_ident(inner.next().expect("field in input ref"));
+            let optional = inner
+                .next()
+                .is_some_and(|p| p.as_rule() == Rule::optional_marker);
+            refs.push(StageInputRef {
+                stage,
+                field,
+                optional,
+                span,
+            });
+        }
+    }
+    refs
+}
+
+fn parse_output_block(pair: pest::iterators::Pair<Rule>) -> Result<Vec<OutputField>, Diagnostic> {
+    let mut fields = Vec::new();
+    for item in pair.into_inner() {
+        if item.as_rule() == Rule::output_field {
+            let mut inner = item.into_inner();
+            let name = parse_ident(inner.next().expect("output field name"));
+            let ty = parse_type_ref(inner.next().expect("output field type"));
+
+            let branches = inner
+                .next()
+                .map(|branch_pair| parse_bool_branches(branch_pair));
+
+            fields.push(OutputField { name, ty, branches });
+        }
+    }
+    Ok(fields)
+}
+
+fn parse_bool_branches(pair: pest::iterators::Pair<Rule>) -> BoolBranches {
+    let inner = pair.into_inner();
+
+    let mut true_target = None;
+    let mut false_target = None;
+
+    for item in inner {
+        match item.as_str() {
+            "true" | "false" | "=>" => {}
+            _other => {
+                if true_target.is_none() {
+                    true_target = Some(parse_ident(item));
+                } else {
+                    false_target = Some(parse_ident(item));
+                }
+            }
+        }
+    }
+
+    BoolBranches {
+        true_target: true_target.expect("true target"),
+        false_target: false_target.expect("false target"),
+    }
+}
+
+fn parse_requires_block(pair: pest::iterators::Pair<Rule>) -> Vec<Ident> {
+    pair.into_inner().map(parse_ident).collect()
+}
+
+pub fn process_string(raw: &str) -> String {
+    if raw.starts_with("\"\"\"") {
+        let inner = &raw[3..raw.len() - 3];
+        let trimmed = inner.trim();
+        if trimmed.contains('\n') {
+            trimmed
+                .lines()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string()
+        } else {
+            trimmed.to_string()
+        }
+    } else {
+        let inner = &raw[1..raw.len() - 1];
+        let unescaped = inner.replace("\\\"", "\"");
+        let trimmed = unescaped.trim();
+        if trimmed.contains('\n') {
+            trimmed
+                .lines()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+}
