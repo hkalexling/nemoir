@@ -13,3 +13,5 @@ clap = { version = "4.5", features = ["derive"] }
 miette = { version = "7", features = ["fancy"] }
 serde_yaml = "0.9"
 nemoir-dsl-fe = { path = "../nemoir-dsl-fe" }
+nemoir-ir = { path = "../nemoir-ir" }
+nemoir-backend-visualizer = { path = "../nemoir-backend-visualizer" }

@@ -358,19 +358,25 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
         });
     }
 
-    let has_entry = resolved_stages
-        .iter()
-        .any(|s| s.annotations.iter().any(|a| matches!(a, StageAnnotation::Entry)));
+    let has_entry = resolved_stages.iter().any(|s| {
+        s.annotations
+            .iter()
+            .any(|a| matches!(a, StageAnnotation::Entry))
+    });
     if !has_entry && !resolved_stages.is_empty() {
         resolved_stages[0].annotations.push(StageAnnotation::Entry);
     }
 
-    let has_exit = resolved_stages
-        .iter()
-        .any(|s| s.annotations.iter().any(|a| matches!(a, StageAnnotation::Exit)));
+    let has_exit = resolved_stages.iter().any(|s| {
+        s.annotations
+            .iter()
+            .any(|a| matches!(a, StageAnnotation::Exit))
+    });
     if !has_exit && !resolved_stages.is_empty() {
         let last = resolved_stages.len() - 1;
-        resolved_stages[last].annotations.push(StageAnnotation::Exit);
+        resolved_stages[last]
+            .annotations
+            .push(StageAnnotation::Exit);
     }
 
     Ok(ResolvedWorkflow {

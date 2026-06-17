@@ -1,0 +1,592 @@
+use nemoir_ir::*;
+
+fn valid_minimal_ir() -> WorkflowIr {
+    WorkflowIr {
+        ir_version: "0.1".into(),
+        kind: "workflow_ir".into(),
+        source: Source {
+            frontend: "test".into(),
+            file: "test.nemo".into(),
+        },
+        workflow: Workflow {
+            id: "Minimal".into(),
+            entry: "A".into(),
+            exits: vec!["B".into()],
+            transition_semantics: TransitionSemantics {
+                selection: "first_match_by_priority".into(),
+                no_match: "error_unless_exit".into(),
+            },
+        },
+        inputs: vec![Input {
+            id: "in1".into(),
+            ty: "string".into(),
+        }],
+        capabilities: vec!["cap.a".into()],
+        policies: vec![],
+        nodes: vec![
+            Node {
+                id: "A".into(),
+                annotations: vec!["entry".into()],
+                prompt: "node A".into(),
+                reads: vec![Read {
+                    ref_: Ref::Input { name: "in1".into() },
+                    optional: false,
+                    origin: "test".into(),
+                }],
+                writes: vec![Write {
+                    name: "out_a".into(),
+                    ty: "string".into(),
+                    optional: false,
+                }],
+                requires: vec![StageCapability {
+                    capability: "cap.a".into(),
+                }],
+                transitions: vec![Transition {
+                    to: "B".into(),
+                    priority: 0,
+                    reason: "fallthrough".into(),
+                    guard: Guard::Always,
+                }],
+            },
+            Node {
+                id: "B".into(),
+                annotations: vec!["exit".into()],
+                prompt: "node B".into(),
+                reads: vec![],
+                writes: vec![Write {
+                    name: "out_b".into(),
+                    ty: "string".into(),
+                    optional: false,
+                }],
+                requires: vec![],
+                transitions: vec![],
+            },
+        ],
+    }
+}
+
+fn assert_valid(ir: &WorkflowIr) {
+    match nemoir_ir::validate::validate(ir) {
+        Ok(()) => {}
+        Err(errors) => {
+            for e in &errors.errors {
+                eprintln!("  validation error: {}", e);
+            }
+            panic!("expected valid IR but got {} errors", errors.errors.len());
+        }
+    }
+}
+
+fn assert_invalid(ir: &WorkflowIr, expected_substr: &str) {
+    match nemoir_ir::validate::validate(ir) {
+        Ok(()) => panic!("expected invalid IR but validation passed"),
+        Err(errors) => {
+            let combined: String = errors
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            if !combined.contains(expected_substr) {
+                for e in &errors.errors {
+                    eprintln!("  validation error: {}", e);
+                }
+                panic!(
+                    "expected error containing '{}' but got: {}",
+                    expected_substr, combined
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn valid_minimal_one_node_workflow_passes() {
+    let ir = valid_minimal_ir();
+    assert_valid(&ir);
+}
+
+fn make_valid_coding_agent_ir() -> WorkflowIr {
+    let source = include_str!("../../nemoir-dsl-fe/tests/fixtures/coding-agent-ir.yml");
+    serde_yaml::from_str(source).expect("should parse coding-agent-ir.yml")
+}
+
+#[test]
+fn valid_coding_agent_ir_passes() {
+    let ir = make_valid_coding_agent_ir();
+    assert_valid(&ir);
+}
+
+#[test]
+fn duplicate_node_ids_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes.push(Node {
+        id: "A".into(),
+        annotations: vec![],
+        prompt: "duplicate".into(),
+        reads: vec![],
+        writes: vec![],
+        requires: vec![],
+        transitions: vec![],
+    });
+    assert_invalid(&ir, "duplicate node id");
+}
+
+#[test]
+fn unknown_entry_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.workflow.entry = "Z".into();
+    assert_invalid(&ir, "entry node 'Z' does not exist");
+}
+
+#[test]
+fn unknown_exit_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.workflow.exits = vec!["Z".into()];
+    assert_invalid(&ir, "exit node 'Z' does not exist");
+}
+
+#[test]
+fn unknown_transition_target_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions[0].to = "Z".into();
+    assert_invalid(&ir, "transition target 'Z' does not exist");
+}
+
+#[test]
+fn unreachable_node_rejected() {
+    let mut ir = valid_minimal_ir();
+    // Add a node with no incoming edges
+    ir.nodes.push(Node {
+        id: "C".into(),
+        annotations: vec![],
+        prompt: "orphan".into(),
+        reads: vec![],
+        writes: vec![],
+        requires: vec![],
+        transitions: vec![],
+    });
+    assert_invalid(&ir, "unreachable from entry");
+}
+
+#[test]
+fn non_exit_with_no_outgoing_transition_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].annotations.retain(|a| a != "entry");
+    ir.nodes[0].transitions = vec![];
+    ir.workflow.entry = "A".into();
+    assert_invalid(&ir, "no outgoing transitions");
+}
+
+#[test]
+fn exit_with_outgoing_transition_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[1].transitions = vec![Transition {
+        to: "A".into(),
+        priority: 0,
+        reason: "back".into(),
+        guard: Guard::Always,
+    }];
+    assert_invalid(&ir, "exit node 'B' must have no outgoing transitions");
+}
+
+#[test]
+fn duplicate_transition_priority_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions.push(Transition {
+        to: "B".into(),
+        priority: 0,
+        reason: "dup".into(),
+        guard: Guard::Always,
+    });
+    assert_invalid(&ir, "duplicate priority");
+}
+
+#[test]
+fn read_of_unknown_workflow_input_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].reads[0] = Read {
+        ref_: Ref::Input {
+            name: "unknown".into(),
+        },
+        optional: false,
+        origin: "test".into(),
+    };
+    assert_invalid(&ir, "unknown workflow input");
+}
+
+#[test]
+fn read_of_unknown_node_output_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].reads[0] = Read {
+        ref_: Ref::NodeOutput {
+            node: "B".into(),
+            field: "nope".into(),
+        },
+        optional: false,
+        origin: "test".into(),
+    };
+    assert_invalid(&ir, "unknown output");
+}
+
+#[test]
+fn guard_ref_to_unknown_node_output_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions[0].guard = Guard::HasValue {
+        r#ref: Ref::NodeOutput {
+            node: "A".into(),
+            field: "no_such_field".into(),
+        },
+    };
+    assert_invalid(&ir, "unknown output");
+}
+
+#[test]
+fn has_value_on_non_optional_output_rejected() {
+    // Make A have an optional output and use has_value on B's non-optional output
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].writes.push(Write {
+        name: "opt_out".into(),
+        ty: "string".into(),
+        optional: true,
+    });
+    ir.nodes[0].transitions[0].guard = Guard::HasValue {
+        r#ref: Ref::NodeOutput {
+            node: "A".into(),
+            field: "out_a".into(),
+        },
+    };
+    assert_invalid(&ir, "non-optional output");
+}
+
+#[test]
+fn node_required_capability_missing_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities = vec![];
+    assert_invalid(&ir, "not declared in top-level capabilities");
+}
+
+#[test]
+fn policy_trigger_capability_missing_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities = vec![];
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "missing.cap".into(),
+            bind: Default::default(),
+        },
+        requires: None,
+        condition: None,
+    }];
+    assert_invalid(&ir, "not declared in top-level capabilities");
+}
+
+#[test]
+fn policy_bound_ref_not_in_trigger_bind_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("cap.x".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "cap.x".into(),
+            bind: Default::default(),
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "cap.x".into(),
+            args: {
+                let mut args = indexmap::IndexMap::new();
+                args.insert(
+                    "p".into(),
+                    ArgValue::Ref {
+                        r#ref: Ref::Bound { name: "p".into() },
+                    },
+                );
+                args
+            },
+        }]),
+        condition: None,
+    }];
+    assert_invalid(&ir, "not declared in trigger bind");
+}
+
+#[test]
+fn guard_eq_input_ref_passes() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Ref {
+            r#ref: Ref::Input { name: "in1".into() },
+        },
+        right: Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("hello".into()),
+        },
+    };
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_eq_bound_ref_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Ref {
+            r#ref: Ref::Bound { name: "x".into() },
+        },
+        right: Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("hello".into()),
+        },
+    };
+    assert_invalid(&ir, "Ref::Bound");
+}
+
+#[test]
+fn future_producer_read_rejected() {
+    let mut ir = valid_minimal_ir();
+    // B reads A's output — valid. Add a third node C and make A read C's output (future/unreachable).
+    ir.workflow.exits = vec!["C".into()];
+    ir.nodes.push(Node {
+        id: "C".into(),
+        annotations: vec!["exit".into()],
+        prompt: "node C".into(),
+        reads: vec![],
+        writes: vec![Write {
+            name: "out_c".into(),
+            ty: "string".into(),
+            optional: false,
+        }],
+        requires: vec![],
+        transitions: vec![],
+    });
+    ir.nodes[1].transitions = vec![Transition {
+        to: "C".into(),
+        priority: 0,
+        reason: "fallthrough".into(),
+        guard: Guard::Always,
+    }];
+    // A tries to read C's output, but C cannot reach A (reverse direction)
+    ir.nodes[0].reads[0] = Read {
+        ref_: Ref::NodeOutput {
+            node: "C".into(),
+            field: "out_c".into(),
+        },
+        optional: false,
+        origin: "test".into(),
+    };
+    assert_invalid(&ir, "cannot reach consumer");
+}
+
+#[test]
+fn self_read_rejected() {
+    let mut ir = valid_minimal_ir();
+    // A reads its own output
+    ir.nodes[0].reads = vec![Read {
+        ref_: Ref::NodeOutput {
+            node: "A".into(),
+            field: "out_a".into(),
+        },
+        optional: false,
+        origin: "test".into(),
+    }];
+    assert_invalid(&ir, "self-read");
+}
+
+#[test]
+fn valid_loop_backref_read_passes() {
+    // A -> B -> A is a valid loop. B reads A's output — valid because A can reach B's position.
+    let mut ir = valid_minimal_ir();
+    ir.nodes[1].annotations.retain(|a| a != "exit");
+    ir.nodes[1].transitions = vec![Transition {
+        to: "A".into(),
+        priority: 0,
+        reason: "backward_ref_loop".into(),
+        guard: Guard::Always,
+    }];
+    // B reads A's out_a
+    ir.nodes[1].reads = vec![Read {
+        ref_: Ref::NodeOutput {
+            node: "A".into(),
+            field: "out_a".into(),
+        },
+        optional: false,
+        origin: "test".into(),
+    }];
+    ir.nodes[0].reads = vec![]; // A no longer reads in1 (not needed for this test)
+                                // Need an exit that is reachable from the loop
+    ir.nodes.push(Node {
+        id: "C".into(),
+        annotations: vec!["exit".into()],
+        prompt: "exit".into(),
+        reads: vec![],
+        writes: vec![],
+        requires: vec![],
+        transitions: vec![],
+    });
+    ir.workflow.exits = vec!["C".into()];
+    ir.nodes[1].transitions[0] = Transition {
+        to: "C".into(),
+        priority: 0,
+        reason: "fallthrough".into(),
+        guard: Guard::Always,
+    };
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_eq_incompatible_types_rejected() {
+    let mut ir = valid_minimal_ir();
+    // A's out_a is string. Guard::Eq compares it with bool literal.
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "out_a".into(),
+            },
+        },
+        right: Expr::Literal {
+            ty: "bool".into(),
+            value: serde_yaml::Value::Bool(true),
+        },
+    };
+    assert_invalid(&ir, "incompatible types");
+}
+
+#[test]
+fn guard_eq_compatible_types_passes() {
+    let mut ir = valid_minimal_ir();
+    // A's out_a is string. Compare with another string literal. Compatible.
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "out_a".into(),
+            },
+        },
+        right: Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("hello".into()),
+        },
+    };
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_require_arg_missing_input_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("cap.x".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "cap.x".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "b1".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "b1".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "cap.x".into(),
+            args: {
+                let mut args = indexmap::IndexMap::new();
+                args.insert(
+                    "p".into(),
+                    ArgValue::Ref {
+                        r#ref: Ref::Input {
+                            name: "nonexistent".into(),
+                        },
+                    },
+                );
+                args
+            },
+        }]),
+        condition: None,
+    }];
+    assert_invalid(&ir, "unknown workflow input");
+}
+
+#[test]
+fn policy_require_arg_valid_input_passes() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("cap.x".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "cap.x".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "b1".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "b1".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "cap.x".into(),
+            args: {
+                let mut args = indexmap::IndexMap::new();
+                args.insert(
+                    "p".into(),
+                    ArgValue::Ref {
+                        r#ref: Ref::Input { name: "in1".into() },
+                    },
+                );
+                args
+            },
+        }]),
+        condition: None,
+    }];
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_require_arg_valid_bound_passes() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("cap.x".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "cap.x".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "b1".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "b1".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "cap.x".into(),
+            args: {
+                let mut args = indexmap::IndexMap::new();
+                args.insert(
+                    "p".into(),
+                    ArgValue::Ref {
+                        r#ref: Ref::Bound { name: "b1".into() },
+                    },
+                );
+                args
+            },
+        }]),
+        condition: None,
+    }];
+    assert_valid(&ir);
+}

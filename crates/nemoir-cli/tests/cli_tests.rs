@@ -5,14 +5,27 @@ fn nemoir_binary() -> Command {
     Command::new(path)
 }
 
+fn coding_agent_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/coding-agent.nemo"
+    )
+    .to_string()
+}
+
+fn dup_stage_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/invalid/duplicate_stage.nemo"
+    )
+    .to_string()
+}
+
 #[test]
 fn cli_check_valid() {
     let output = nemoir_binary()
         .arg("check")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../nemoir-dsl-fe/tests/fixtures/coding-agent.nemo"
-        ))
+        .arg(coding_agent_path())
         .output()
         .expect("should run nemoir check");
     assert!(output.status.success(), "check should succeed");
@@ -24,10 +37,7 @@ fn cli_check_valid() {
 fn cli_check_invalid() {
     let output = nemoir_binary()
         .arg("check")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../nemoir-dsl-fe/tests/fixtures/invalid/duplicate_stage.nemo"
-        ))
+        .arg(dup_stage_path())
         .output()
         .expect("should run nemoir check");
     assert!(
@@ -37,46 +47,192 @@ fn cli_check_invalid() {
 }
 
 #[test]
-fn cli_lower_stdout() {
+fn cli_compile_default_none_no_artifact() {
     let output = nemoir_binary()
-        .arg("lower")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../nemoir-dsl-fe/tests/fixtures/coding-agent.nemo"
-        ))
+        .arg("compile")
+        .arg(coding_agent_path())
         .output()
-        .expect("should run nemoir lower");
-    assert!(output.status.success(), "lower should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+        .expect("should run nemoir compile (default none)");
+
     assert!(
-        stdout.contains("ir_version"),
-        "should contain ir_version in YAML"
+        output.status.success(),
+        "compile with default none should succeed"
     );
-    assert!(stdout.contains("CodingAgent"), "should contain workflow id");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("IR validated successfully"),
+        "should report successful validation"
+    );
 }
 
 #[test]
-fn cli_lower_to_file() {
-    let out_path = std::env::temp_dir().join("nemoir_cli_test_out.yml");
+fn cli_compile_default_none_dump_ir() {
     let output = nemoir_binary()
-        .arg("lower")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../nemoir-dsl-fe/tests/fixtures/coding-agent.nemo"
-        ))
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--dump-ir")
+        .output()
+        .expect("should run nemoir compile --dump-ir (default none)");
+
+    assert!(output.status.success(), "compile --dump-ir should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ir_version"),
+        "stdout should contain YAML IR"
+    );
+    assert!(
+        stdout.contains("CodingAgent"),
+        "stdout should contain workflow id"
+    );
+    // With default none, should NOT have written any file
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("wrote:"),
+        "default none should not write a file"
+    );
+}
+
+#[test]
+fn cli_compile_visualizer_creates_html() {
+    let out_path = std::env::temp_dir().join("coding-agent.html");
+    let _ = std::fs::remove_file(&out_path);
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("visualizer")
         .arg("-o")
         .arg(&out_path)
         .output()
-        .expect("should run nemoir lower -o");
-    assert!(output.status.success(), "lower -o should succeed");
-    let contents = std::fs::read_to_string(&out_path).expect("should read output file");
+        .expect("should run nemoir compile --target visualizer");
+
     assert!(
-        contents.contains("ir_version"),
-        "should contain ir_version in file"
+        output.status.success(),
+        "compile --target visualizer should succeed"
+    );
+    let html = std::fs::read_to_string(&out_path).expect("should read output file");
+    assert!(html.contains("<!DOCTYPE html>"), "should be valid HTML");
+    assert!(html.contains("CodingAgent"), "should contain workflow id");
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn cli_compile_visualizer_output_path() {
+    let out_path = std::env::temp_dir().join("graph.html");
+    let _ = std::fs::remove_file(&out_path);
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("visualizer")
+        .arg("-o")
+        .arg(&out_path)
+        .output()
+        .expect("should run nemoir compile --target visualizer -o");
+
+    assert!(output.status.success(), "compile -o should succeed");
+    assert!(out_path.exists(), "output file should exist");
+    let html = std::fs::read_to_string(&out_path).expect("should read output file");
+    assert!(html.contains("CodingAgent"), "should contain workflow id");
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn cli_compile_visualizer_dump_ir() {
+    let out_path = std::env::temp_dir().join("nemoir_dump_ir_test.html");
+    let _ = std::fs::remove_file(&out_path);
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("visualizer")
+        .arg("--dump-ir")
+        .arg("-o")
+        .arg(&out_path)
+        .output()
+        .expect("should run nemoir compile --target visualizer --dump-ir");
+
+    assert!(output.status.success(), "compile --dump-ir should succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ir_version"),
+        "stdout should contain YAML IR"
     );
     assert!(
-        contents.contains("CodingAgent"),
-        "should contain workflow id"
+        stdout.contains("CodingAgent"),
+        "stdout should contain workflow id"
     );
-    std::fs::remove_file(&out_path).ok();
+
+    let html = std::fs::read_to_string(&out_path).expect("should read output file");
+    assert!(
+        html.contains("CodingAgent"),
+        "HTML should contain workflow id"
+    );
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn cli_compile_unknown_target() {
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("bogus")
+        .output()
+        .expect("should run nemoir compile --target bogus");
+
+    assert!(!output.status.success(), "unknown target should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown compile target"),
+        "should mention unknown target"
+    );
+    assert!(
+        stderr.contains("none"),
+        "should list 'none' as supported target"
+    );
+    assert!(
+        stderr.contains("visualizer"),
+        "should list 'visualizer' as supported target"
+    );
+}
+
+#[test]
+fn cli_compile_visualizer_stdin_no_output_fails() {
+    let source = std::fs::read_to_string(coding_agent_path()).expect("should read source");
+    let mut child = nemoir_binary()
+        .arg("compile")
+        .arg("-")
+        .arg("--target")
+        .arg("visualizer")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("should spawn nemoir");
+
+    {
+        let stdin = child.stdin.as_mut().expect("should get stdin");
+        use std::io::Write;
+        stdin
+            .write_all(source.as_bytes())
+            .expect("should write to stdin");
+    }
+
+    let output = child.wait_with_output().expect("should wait for output");
+
+    assert!(
+        !output.status.success(),
+        "stdin with visualizer and no --output should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires --output"),
+        "should mention --output is required: {}",
+        stderr
+    );
 }

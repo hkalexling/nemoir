@@ -161,7 +161,13 @@ line 2"""
 }"#;
         let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
         assert_eq!(ast.stages.len(), 2);
-        assert!(ast.stages[0].annotations.is_empty(), "no annotations parsed");
-        assert!(ast.stages[1].annotations.is_empty(), "no annotations parsed");
+        assert!(
+            ast.stages[0].annotations.is_empty(),
+            "no annotations parsed"
+        );
+        assert!(
+            ast.stages[1].annotations.is_empty(),
+            "no annotations parsed"
+        );
     }
 }

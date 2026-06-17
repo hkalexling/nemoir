@@ -1,3 +1,5 @@
+pub mod validate;
+
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
