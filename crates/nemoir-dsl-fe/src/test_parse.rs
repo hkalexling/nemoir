@@ -147,4 +147,21 @@ line 2"""
             }
         }
     }
+
+    #[test]
+    fn test_parse_no_annotations() {
+        let input = r#"workflow Test {
+  stage First {
+    prompt: "first"
+    output: { x: string }
+  }
+  stage Last {
+    prompt: "last"
+  }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        assert_eq!(ast.stages.len(), 2);
+        assert!(ast.stages[0].annotations.is_empty(), "no annotations parsed");
+        assert!(ast.stages[1].annotations.is_empty(), "no annotations parsed");
+    }
 }

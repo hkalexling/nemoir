@@ -1,7 +1,7 @@
 use std::process::Command;
 
 fn nemoir_binary() -> Command {
-    let path = std::env::var("CARGO_BIN_EXE_nemoir-dsl").expect("CARGO_BIN_EXE_nemoir-dsl not set");
+    let path = std::env::var("CARGO_BIN_EXE_nemo").expect("CARGO_BIN_EXE_nemo not set");
     Command::new(path)
 }
 
@@ -26,7 +26,7 @@ fn cli_check_invalid() {
         .arg("check")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../nemoir-dsl-fe/tests/fixtures/invalid/no_entry.nemo"
+            "/../nemoir-dsl-fe/tests/fixtures/invalid/duplicate_stage.nemo"
         ))
         .output()
         .expect("should run nemoir check");

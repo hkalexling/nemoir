@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use miette::NamedSource;
 
 #[derive(Parser)]
-#[command(name = "nemoir-dsl", about = "NemoIR DSL Frontend CLI")]
+#[command(name = "nemo", about = "NemoIR DSL Frontend CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -260,15 +260,6 @@ fn validate_shape(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnosti
         })
         .collect();
 
-    if entry_stages.is_empty() {
-        return Err(Diagnostic::ShapeError(ShapeError {
-            message: "workflow has no @entry stage".into(),
-            filename: filename.to_string(),
-            label: None,
-            help: Some("add `@entry` to one stage, e.g. `stage@entry Triage { ... }`".into()),
-        }));
-    }
-
     if entry_stages.len() > 1 {
         let names: Vec<_> = entry_stages.iter().map(|s| s.name.text.clone()).collect();
         return Err(Diagnostic::ShapeError(ShapeError {
@@ -276,25 +267,6 @@ fn validate_shape(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnosti
             filename: filename.to_string(),
             label: None,
             help: Some("only one stage can be annotated @entry".into()),
-        }));
-    }
-
-    let exit_stages: Vec<_> = rw
-        .stages
-        .iter()
-        .filter(|s| {
-            s.annotations
-                .iter()
-                .any(|a| matches!(a, StageAnnotation::Exit))
-        })
-        .collect();
-
-    if exit_stages.is_empty() {
-        return Err(Diagnostic::ShapeError(ShapeError {
-            message: "workflow has no @exit stage".into(),
-            filename: filename.to_string(),
-            label: None,
-            help: Some("add `@exit` to one stage, e.g. `stage@exit Fin { ... }`".into()),
         }));
     }
 

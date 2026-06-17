@@ -5,6 +5,9 @@ workflow Test {
       x: string
     }
   }
+  stage@exit Early {
+    prompt: "exit too early"
+  }
   stage NoExitForward {
     prompt: "I have nowhere to go"
     output: {

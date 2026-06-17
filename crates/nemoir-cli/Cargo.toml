@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "nemoir-dsl"
+name = "nemo"
 path = "src/main.rs"
 
 [dependencies]

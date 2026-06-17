@@ -11,8 +11,6 @@ macro_rules! test_invalid {
     };
 }
 
-test_invalid!(no_exit, "no_exit.nemo");
-test_invalid!(no_entry, "no_entry.nemo");
 test_invalid!(no_stages, "no_stages.nemo");
 test_invalid!(multiple_entry, "multiple_entry.nemo");
 test_invalid!(duplicate_stage, "duplicate_stage.nemo");
@@ -104,18 +102,6 @@ fn duplicate_stage_message() {
     assert!(
         msg.contains("duplicate stage name"),
         "expected 'duplicate stage name' in error, got: {}",
-        msg
-    );
-}
-
-#[test]
-fn missing_entry_message() {
-    let source = include_str!("fixtures/invalid/no_entry.nemo");
-    let err = check(source, "no_entry.nemo").unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("no @entry"),
-        "expected 'no @entry' in error, got: {}",
         msg
     );
 }
