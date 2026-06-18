@@ -1,5 +1,69 @@
 use nemoir_ir::*;
 
+#[test]
+fn catalog_get_capability_returns_specs() {
+    use nemoir_ir::capabilities::*;
+
+    let spec = get_capability("fs.read").expect("fs.read should be known");
+    assert_eq!(spec.name, "fs.read");
+    assert_eq!(spec.required_params.len(), 1);
+    assert_eq!(spec.required_params[0].name, "path");
+    assert_eq!(spec.required_params[0].ty, CapabilityParamType::Path);
+
+    let spec = get_capability("fs.write").expect("fs.write should be known");
+    assert_eq!(spec.name, "fs.write");
+    assert_eq!(spec.required_params.len(), 2);
+    assert_eq!(spec.required_params[0].name, "path");
+    assert_eq!(spec.required_params[0].ty, CapabilityParamType::Path);
+    assert_eq!(spec.required_params[1].name, "content");
+    assert_eq!(spec.required_params[1].ty, CapabilityParamType::String);
+
+    let spec = get_capability("os.shell").expect("os.shell should be known");
+    assert_eq!(spec.name, "os.shell");
+    assert_eq!(spec.required_params.len(), 1);
+    assert_eq!(spec.required_params[0].name, "command");
+    assert_eq!(spec.required_params[0].ty, CapabilityParamType::String);
+
+    assert!(get_capability("made.up").is_none());
+    assert_eq!(is_known_capability("fs.read"), true);
+    assert_eq!(is_known_capability("made.up"), false);
+}
+
+#[test]
+fn catalog_fs_write_content_is_string() {
+    use nemoir_ir::capabilities::get_capability;
+    let spec = get_capability("fs.write").unwrap();
+    let content = spec
+        .required_params
+        .iter()
+        .find(|p| p.name == "content")
+        .unwrap();
+    assert_eq!(
+        content.ty,
+        nemoir_ir::capabilities::CapabilityParamType::String
+    );
+}
+
+#[test]
+fn catalog_has_exactly_five_entries() {
+    use nemoir_ir::capabilities::get_capability;
+    let names = [
+        "fs.read",
+        "fs.write",
+        "os.shell",
+        "user.elicit",
+        "user.confirm",
+    ];
+    for name in &names {
+        assert!(
+            get_capability(name).is_some(),
+            "expected catalog to contain '{}'",
+            name
+        );
+    }
+    assert!(get_capability("fs.delete").is_none());
+}
+
 fn valid_minimal_ir() -> WorkflowIr {
     WorkflowIr {
         ir_version: "0.1".into(),
@@ -21,7 +85,7 @@ fn valid_minimal_ir() -> WorkflowIr {
             id: "in1".into(),
             ty: "string".into(),
         }],
-        capabilities: vec!["cap.a".into()],
+        capabilities: vec!["fs.read".into()],
         policies: vec![],
         nodes: vec![
             Node {
@@ -39,7 +103,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                     optional: false,
                 }],
                 requires: vec![StageCapability {
-                    capability: "cap.a".into(),
+                    capability: "fs.read".into(),
                 }],
                 transitions: vec![Transition {
                     to: "B".into(),
@@ -284,18 +348,174 @@ fn policy_trigger_capability_missing_rejected() {
 }
 
 #[test]
-fn policy_bound_ref_not_in_trigger_bind_rejected() {
+fn unknown_top_level_capability_rejected() {
     let mut ir = valid_minimal_ir();
-    ir.capabilities.push("cap.x".into());
+    ir.capabilities.push("made.up".into());
+    assert_invalid(&ir, "unknown capability");
+}
+
+#[test]
+fn unknown_stage_capability_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].requires[0].capability = "made.up".into();
+    assert_invalid(&ir, "unknown capability");
+}
+
+#[test]
+fn unknown_policy_trigger_capability_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("made.up".into());
     ir.policies = vec![Policy {
         id: "p1".into(),
         kind: "before".into(),
         trigger: Trigger {
-            capability: "cap.x".into(),
+            capability: "made.up".into(),
+            bind: Default::default(),
+        },
+        requires: None,
+        condition: None,
+    }];
+    assert_invalid(&ir, "unknown capability");
+}
+
+#[test]
+fn unknown_policy_required_capability_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("fs.write".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "fs.write".into(),
             bind: Default::default(),
         },
         requires: Some(vec![RequiredCapability {
-            capability: "cap.x".into(),
+            capability: "made.up".into(),
+            args: Default::default(),
+        }]),
+        condition: None,
+    }];
+    assert_invalid(&ir, "unknown capability");
+}
+
+#[test]
+fn unknown_policy_trigger_bind_param_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("fs.write".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "fs.write".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "filename".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "filename".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: None,
+    }];
+    assert_invalid(&ir, "has no required parameter");
+}
+
+#[test]
+fn unknown_policy_required_arg_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("fs.read".into());
+    ir.capabilities.push("fs.write".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "fs.write".into(),
+            bind: Default::default(),
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "fs.read".into(),
+            args: {
+                let mut args = indexmap::IndexMap::new();
+                args.insert(
+                    "filename".into(),
+                    ArgValue::Ref {
+                        r#ref: Ref::Input { name: "in1".into() },
+                    },
+                );
+                args
+            },
+        }]),
+        condition: None,
+    }];
+    assert_invalid(&ir, "has no required parameter");
+}
+
+#[test]
+fn user_confirm_without_forwarded_args_is_valid() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("fs.write".into());
+    ir.capabilities.push("user.confirm".into());
+    ir.policies = vec![Policy {
+        id: "before_fs_write_requires_fs_read_and_user_confirm".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "fs.write".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "path".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "path".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: Some(vec![
+            RequiredCapability {
+                capability: "fs.read".into(),
+                args: {
+                    let mut args = indexmap::IndexMap::new();
+                    args.insert(
+                        "path".into(),
+                        ArgValue::Ref {
+                            r#ref: Ref::Bound {
+                                name: "path".into(),
+                            },
+                        },
+                    );
+                    args
+                },
+            },
+            RequiredCapability {
+                capability: "user.confirm".into(),
+                args: Default::default(),
+            },
+        ]),
+        condition: None,
+    }];
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_bound_ref_not_in_trigger_bind_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: Default::default(),
+        },
+        requires: Some(vec![RequiredCapability {
+            capability: "os.shell".into(),
             args: {
                 let mut args = indexmap::IndexMap::new();
                 args.insert(
@@ -475,30 +695,30 @@ fn guard_eq_compatible_types_passes() {
 #[test]
 fn policy_require_arg_missing_input_rejected() {
     let mut ir = valid_minimal_ir();
-    ir.capabilities.push("cap.x".into());
+    ir.capabilities.push("os.shell".into());
     ir.policies = vec![Policy {
         id: "p1".into(),
         kind: "before".into(),
         trigger: Trigger {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             bind: {
                 let mut b = indexmap::IndexMap::new();
                 b.insert(
-                    "b1".into(),
+                    "command".into(),
                     BindArg {
                         kind: "arg".into(),
-                        name: "b1".into(),
+                        name: "command".into(),
                     },
                 );
                 b
             },
         },
         requires: Some(vec![RequiredCapability {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             args: {
                 let mut args = indexmap::IndexMap::new();
                 args.insert(
-                    "p".into(),
+                    "command".into(),
                     ArgValue::Ref {
                         r#ref: Ref::Input {
                             name: "nonexistent".into(),
@@ -516,30 +736,30 @@ fn policy_require_arg_missing_input_rejected() {
 #[test]
 fn policy_require_arg_valid_input_passes() {
     let mut ir = valid_minimal_ir();
-    ir.capabilities.push("cap.x".into());
+    ir.capabilities.push("os.shell".into());
     ir.policies = vec![Policy {
         id: "p1".into(),
         kind: "before".into(),
         trigger: Trigger {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             bind: {
                 let mut b = indexmap::IndexMap::new();
                 b.insert(
-                    "b1".into(),
+                    "command".into(),
                     BindArg {
                         kind: "arg".into(),
-                        name: "b1".into(),
+                        name: "command".into(),
                     },
                 );
                 b
             },
         },
         requires: Some(vec![RequiredCapability {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             args: {
                 let mut args = indexmap::IndexMap::new();
                 args.insert(
-                    "p".into(),
+                    "command".into(),
                     ArgValue::Ref {
                         r#ref: Ref::Input { name: "in1".into() },
                     },
@@ -555,32 +775,34 @@ fn policy_require_arg_valid_input_passes() {
 #[test]
 fn policy_require_arg_valid_bound_passes() {
     let mut ir = valid_minimal_ir();
-    ir.capabilities.push("cap.x".into());
+    ir.capabilities.push("os.shell".into());
     ir.policies = vec![Policy {
         id: "p1".into(),
         kind: "before".into(),
         trigger: Trigger {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             bind: {
                 let mut b = indexmap::IndexMap::new();
                 b.insert(
-                    "b1".into(),
+                    "command".into(),
                     BindArg {
                         kind: "arg".into(),
-                        name: "b1".into(),
+                        name: "command".into(),
                     },
                 );
                 b
             },
         },
         requires: Some(vec![RequiredCapability {
-            capability: "cap.x".into(),
+            capability: "os.shell".into(),
             args: {
                 let mut args = indexmap::IndexMap::new();
                 args.insert(
-                    "p".into(),
+                    "command".into(),
                     ArgValue::Ref {
-                        r#ref: Ref::Bound { name: "b1".into() },
+                        r#ref: Ref::Bound {
+                            name: "command".into(),
+                        },
                     },
                 );
                 args

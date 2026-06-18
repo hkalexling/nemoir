@@ -43,6 +43,16 @@ test_invalid!(policy_string_contains, "policy_string_contains.nemo");
 test_invalid!(optional_workflow_input, "optional_workflow_input.nemo");
 test_invalid!(optional_bool_branch, "optional_bool_branch.nemo");
 test_invalid!(multiple_bool_branches, "multiple_bool_branches.nemo");
+test_invalid!(unknown_capability_stage, "unknown_capability_stage.nemo");
+test_invalid!(unknown_capability_policy, "unknown_capability_policy.nemo");
+test_invalid!(
+    policy_unknown_trigger_param,
+    "policy_unknown_trigger_param.nemo"
+);
+test_invalid!(
+    policy_unknown_required_param,
+    "policy_unknown_required_param.nemo"
+);
 
 // Targeted diagnostic quality tests: assert error message content for key cases.
 
@@ -162,6 +172,30 @@ fn multiple_bool_branches_message() {
     assert!(
         msg.contains("bool branch output fields"),
         "expected 'bool branch output fields' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn unknown_capability_stage_message() {
+    let source = include_str!("fixtures/invalid/unknown_capability_stage.nemo");
+    let err = check(source, "unknown_capability_stage.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown capability"),
+        "expected 'unknown capability' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn unknown_capability_policy_message() {
+    let source = include_str!("fixtures/invalid/unknown_capability_policy.nemo");
+    let err = check(source, "unknown_capability_policy.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown capability"),
+        "expected 'unknown capability' in error, got: {}",
         msg
     );
 }

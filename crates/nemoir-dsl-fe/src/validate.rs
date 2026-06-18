@@ -5,11 +5,13 @@ use crate::diagnostics::{
     Diagnostic, GraphError, NameError, ShapeError, TransitionError, TypeError,
 };
 use crate::resolve::ResolvedWorkflow;
+use nemoir_ir::capabilities;
 use nemoir_ir::{Expr, Guard, Ref, Transition};
 use serde_yaml;
 
 pub fn validate(rw: &ResolvedWorkflow, filename: &str) -> Result<Vec<Vec<Transition>>, Diagnostic> {
     validate_shape(rw, filename)?;
+    validate_stage_capabilities(rw, filename)?;
     validate_policies(rw, filename)?;
     let transitions = infer_transitions(rw, filename)?;
 
@@ -40,6 +42,29 @@ pub fn validate(rw: &ResolvedWorkflow, filename: &str) -> Result<Vec<Vec<Transit
     Ok(transitions)
 }
 
+fn validate_stage_capabilities(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic> {
+    for stage in &rw.stages {
+        for cap in &stage.requires {
+            if !capabilities::is_known_capability(&cap.text) {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!(
+                        "unknown capability `{}` in stage `{}`",
+                        cap.text, stage.name.text
+                    ),
+                    filename: filename.to_string(),
+                    label: Some((
+                        cap.span.start,
+                        cap.span.end,
+                        format!("`{}` is not a known NemoIR capability", cap.text),
+                    )),
+                    help: None,
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_policies(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic> {
     let input_names: HashSet<&str> = rw.inputs.iter().map(|i| i.name.text.as_str()).collect();
     let input_types: HashMap<&str, BaseType> = rw
@@ -56,8 +81,89 @@ fn validate_policies(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagno
             .map(|a| a.text.as_str())
             .collect();
 
+        if !capabilities::is_known_capability(&policy.trigger.capability.text) {
+            return Err(Diagnostic::NameError(NameError {
+                message: format!(
+                    "unknown capability `{}` in policy trigger",
+                    policy.trigger.capability.text
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    policy.trigger.capability.span.start,
+                    policy.trigger.capability.span.end,
+                    format!(
+                        "`{}` is not a known NemoIR capability",
+                        policy.trigger.capability.text
+                    ),
+                )),
+                help: None,
+            }));
+        }
+
+        if let Some(spec) = capabilities::get_capability(&policy.trigger.capability.text) {
+            for arg in &policy.trigger.args {
+                if !spec.has_required_param(&arg.text) {
+                    return Err(Diagnostic::NameError(NameError {
+                        message: format!(
+                            "capability `{}` has no required parameter `{}`",
+                            policy.trigger.capability.text, arg.text
+                        ),
+                        filename: filename.to_string(),
+                        label: Some((
+                            arg.span.start,
+                            arg.span.end,
+                            format!(
+                                "`{}` is not a required parameter of `{}`",
+                                arg.text, policy.trigger.capability.text
+                            ),
+                        )),
+                        help: None,
+                    }));
+                }
+            }
+        }
+
         if let Some(ref requires) = policy.requires {
             for req in requires {
+                if !capabilities::is_known_capability(&req.capability.text) {
+                    return Err(Diagnostic::NameError(NameError {
+                        message: format!(
+                            "unknown capability `{}` in policy requirement",
+                            req.capability.text
+                        ),
+                        filename: filename.to_string(),
+                        label: Some((
+                            req.capability.span.start,
+                            req.capability.span.end,
+                            format!("`{}` is not a known NemoIR capability", req.capability.text),
+                        )),
+                        help: None,
+                    }));
+                }
+
+                if let Some(spec) = capabilities::get_capability(&req.capability.text) {
+                    for arg in &req.args {
+                        if !spec.has_required_param(&arg.text) {
+                            return Err(Diagnostic::NameError(NameError {
+                                message: format!(
+                                    "capability `{}` has no required parameter `{}`",
+                                    req.capability.text, arg.text
+                                ),
+                                filename: filename.to_string(),
+                                label: Some((
+                                    arg.span.start,
+                                    arg.span.end,
+                                    format!(
+                                        "`{}` is not a required parameter of `{}`",
+                                        arg.text, req.capability.text
+                                    ),
+                                )),
+                                help: None,
+                            }));
+                        }
+                    }
+                }
+
                 for arg in &req.args {
                     if !bound_vars.contains(arg.text.as_str()) {
                         return Err(Diagnostic::NameError(NameError {

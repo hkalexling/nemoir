@@ -127,6 +127,12 @@ pub fn validate(ir: &WorkflowIr) -> Result<(), ValidationErrors> {
 
     for node in &ir.nodes {
         for cap in &node.requires {
+            if !crate::capabilities::is_known_capability(&cap.capability) {
+                errors.push(
+                    format!("nodes.{}.requires", node.id),
+                    format!("unknown capability '{}'", cap.capability),
+                );
+            }
             if !capability_set.contains(&cap.capability) {
                 errors.push(
                     format!("nodes.{}.requires", node.id),
@@ -203,6 +209,12 @@ fn build_capability_set(capabilities: &[String], errors: &mut ValidationErrors) 
             errors.push(
                 format!("capabilities[{}]", i),
                 format!("duplicate capability '{}'", cap),
+            );
+        }
+        if !crate::capabilities::is_known_capability(cap) {
+            errors.push(
+                format!("capabilities[{}]", i),
+                format!("unknown capability '{}'", cap),
             );
         }
     }
@@ -769,6 +781,15 @@ fn validate_policy_refs(
     errors: &mut ValidationErrors,
 ) {
     for (i, policy) in policies.iter().enumerate() {
+        let trigger_spec = crate::capabilities::get_capability(&policy.trigger.capability);
+
+        if trigger_spec.is_none() {
+            errors.push(
+                format!("policies[{}].trigger.capability", i),
+                format!("unknown capability '{}'", policy.trigger.capability),
+            );
+        }
+
         if !capability_set.contains(&policy.trigger.capability) {
             errors.push(
                 format!("policies[{}].trigger.capability", i),
@@ -779,10 +800,31 @@ fn validate_policy_refs(
             );
         }
 
+        if let Some(spec) = trigger_spec {
+            for (bind_name, _) in &policy.trigger.bind {
+                if !spec.has_required_param(bind_name) {
+                    errors.push(
+                        format!("policies[{}].trigger.bind.{}", i, bind_name),
+                        format!(
+                            "capability '{}' has no required parameter '{}'",
+                            policy.trigger.capability, bind_name
+                        ),
+                    );
+                }
+            }
+        }
+
         let bound_names: HashSet<&str> = policy.trigger.bind.keys().map(|s| s.as_str()).collect();
 
         if let Some(ref requires) = policy.requires {
             for (j, req) in requires.iter().enumerate() {
+                if !crate::capabilities::is_known_capability(&req.capability) {
+                    errors.push(
+                        format!("policies[{}].requires[{}].capability", i, j),
+                        format!("unknown capability '{}'", req.capability),
+                    );
+                }
+
                 if !capability_set.contains(&req.capability) {
                     errors.push(
                         format!("policies[{}].requires[{}].capability", i, j),
@@ -792,6 +834,21 @@ fn validate_policy_refs(
                         ),
                     );
                 }
+
+                if let Some(spec) = crate::capabilities::get_capability(&req.capability) {
+                    for (arg_name, _) in &req.args {
+                        if !spec.has_required_param(arg_name) {
+                            errors.push(
+                                format!("policies[{}].requires[{}].args.{}", i, j, arg_name),
+                                format!(
+                                    "capability '{}' has no required parameter '{}'",
+                                    req.capability, arg_name
+                                ),
+                            );
+                        }
+                    }
+                }
+
                 for (arg_name, arg_val) in &req.args {
                     let ArgValue::Ref { r#ref } = arg_val;
                     validate_policy_ref(

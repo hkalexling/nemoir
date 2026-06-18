@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod validate;
 
 use indexmap::IndexMap;

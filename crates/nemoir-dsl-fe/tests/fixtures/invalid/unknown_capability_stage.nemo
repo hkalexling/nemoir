@@ -1,0 +1,22 @@
+workflow Test {
+  input {
+    x: string
+  }
+  stage@entry Start {
+    prompt: "start"
+    requires: made.up
+    output: {
+      ok: bool {
+        true => Fin
+        false => Start
+      }
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.ok
+    output: {
+      done: string
+    }
+  }
+}
