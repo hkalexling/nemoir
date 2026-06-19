@@ -319,6 +319,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemoir-backend-python"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "nemoir-ir",
+ "serde_yaml",
+ "thiserror",
+]
+
+[[package]]
 name = "nemoir-backend-visualizer"
 version = "0.1.0"
 dependencies = [
@@ -335,6 +345,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "miette",
+ "nemoir-backend-python",
  "nemoir-backend-visualizer",
  "nemoir-dsl-fe",
  "nemoir-ir",

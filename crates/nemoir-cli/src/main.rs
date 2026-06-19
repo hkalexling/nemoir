@@ -115,9 +115,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("wrote: {}", out_path);
                     }
                 }
+                "python" => {
+                    if file == "-" && output.is_none() {
+                        eprintln!("error: stdin input with python target requires --output/-o");
+                        std::process::exit(1);
+                    }
+                    let out_dir = match output {
+                        Some(ref p) => p.clone(),
+                        None => {
+                            let parent = Path::new(&file)
+                                .parent()
+                                .filter(|p| !p.as_os_str().is_empty())
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                            parent.to_string_lossy().into_owned()
+                        }
+                    };
+
+                    let generated = nemoir_backend_python::generate_package(
+                        &ir,
+                        &nemoir_backend_python::PythonBackendOptions::default(),
+                    )
+                    .unwrap_or_else(|e| {
+                        eprintln!("error: python backend failed: {}", e);
+                        std::process::exit(1);
+                    });
+
+                    std::fs::create_dir_all(&out_dir).unwrap_or_else(|e| {
+                        eprintln!(
+                            "error: failed to create output directory '{}': {}",
+                            out_dir, e
+                        );
+                        std::process::exit(1);
+                    });
+
+                    let package_root = Path::new(&out_dir).join(&generated.package_name);
+                    std::fs::create_dir_all(&package_root).unwrap_or_else(|e| {
+                        eprintln!(
+                            "error: failed to create package directory '{}': {}",
+                            package_root.display(),
+                            e
+                        );
+                        std::process::exit(1);
+                    });
+
+                    for file in &generated.files {
+                        let target = Path::new(&out_dir).join(&file.relative_path);
+                        if let Some(parent) = target.parent() {
+                            std::fs::create_dir_all(parent).ok();
+                        }
+                        std::fs::write(&target, &file.content).unwrap_or_else(|e| {
+                            eprintln!("error: failed to write '{}': {}", target.display(), e);
+                            std::process::exit(1);
+                        });
+                    }
+
+                    if !dump_ir {
+                        eprintln!("wrote: {}", package_root.display());
+                    }
+                }
                 other => {
                     eprintln!("error: unknown compile target `{}`", other);
-                    eprintln!("supported targets: none, visualizer");
+                    eprintln!("supported targets: none, visualizer, python");
                     std::process::exit(1);
                 }
             }

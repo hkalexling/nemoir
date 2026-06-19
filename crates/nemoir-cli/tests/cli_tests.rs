@@ -199,6 +199,10 @@ fn cli_compile_unknown_target() {
         stderr.contains("visualizer"),
         "should list 'visualizer' as supported target"
     );
+    assert!(
+        stderr.contains("python"),
+        "should list 'python' as supported target"
+    );
 }
 
 #[test]
@@ -235,4 +239,164 @@ fn cli_compile_visualizer_stdin_no_output_fails() {
         "should mention --output is required: {}",
         stderr
     );
+}
+
+// ---------------------------------------------------------------------------
+// `nemo compile --target python` integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_compile_python_creates_package() {
+    let out_dir = std::env::temp_dir().join("nemoir_python_creates");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("python")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target python");
+
+    assert!(
+        output.status.success(),
+        "compile --target python should succeed"
+    );
+
+    // Expected generated files.
+    let init_path = out_dir.join("coding_agent").join("__init__.py");
+    let manifest_path = out_dir.join("coding_agent").join("_manifest.py");
+    let pyproject_path = out_dir.join("pyproject.toml");
+    assert!(init_path.exists(), "should generate __init__.py");
+    assert!(manifest_path.exists(), "should generate _manifest.py");
+    assert!(pyproject_path.exists(), "should generate pyproject.toml");
+
+    let init_src = std::fs::read_to_string(&init_path).expect("should read __init__.py");
+    assert!(init_src.contains("Agent"), "init should expose Agent");
+    assert!(
+        init_src.contains("AgentInput"),
+        "init should expose AgentInput"
+    );
+
+    let manifest_src = std::fs::read_to_string(&manifest_path).expect("should read _manifest.py");
+    assert!(
+        manifest_src.contains("workflow_id=\"CodingAgent\""),
+        "manifest should encode WorkflowId"
+    );
+
+    let pyproject_src =
+        std::fs::read_to_string(&pyproject_path).expect("should read pyproject.toml");
+    assert!(pyproject_src.contains("name = \"coding-agent\""));
+    assert!(pyproject_src.contains("packages = [\"coding_agent\"]"));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_python_default_output_into_file_dir() {
+    // Place a copy of coding-agent.nemo inside a temp dir and compile it without
+    // `-o`, then assert the generated coding_agent/ lands next to the source.
+    let work_dir = std::env::temp_dir().join("nemoir_python_default");
+    let _ = std::fs::remove_dir_all(&work_dir);
+    std::fs::create_dir_all(&work_dir).expect("should create tempdir");
+    let source = std::fs::read_to_string(coding_agent_path()).expect("should read source");
+    let nemo_in_tmp = work_dir.join("coding-agent.nemo");
+    std::fs::write(&nemo_in_tmp, source).expect("should write source copy");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(&nemo_in_tmp)
+        .arg("--target")
+        .arg("python")
+        .output()
+        .expect("should run nemo compile --target python (default output)");
+
+    assert!(
+        output.status.success(),
+        "default-output compile should succeed"
+    );
+
+    let generated_pkg = work_dir.join("coding_agent");
+    assert!(
+        generated_pkg.join("__init__.py").exists(),
+        "package dir should exist next to source file"
+    );
+    assert!(work_dir.join("pyproject.toml").exists());
+
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
+
+#[test]
+fn cli_compile_python_stdin_no_output_fails() {
+    let source = std::fs::read_to_string(coding_agent_path()).expect("should read source");
+    let mut child = nemoir_binary()
+        .arg("compile")
+        .arg("-")
+        .arg("--target")
+        .arg("python")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("should spawn nemo");
+
+    {
+        let stdin = child.stdin.as_mut().expect("should get stdin");
+        use std::io::Write;
+        stdin
+            .write_all(source.as_bytes())
+            .expect("should write to stdin");
+    }
+
+    let output = child.wait_with_output().expect("should wait for output");
+
+    assert!(
+        !output.status.success(),
+        "stdin with python target and no --output should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires --output"),
+        "should mention --output is required: {}",
+        stderr
+    );
+}
+
+#[test]
+fn cli_compile_python_dump_ir_writes_package_and_dumps_yaml() {
+    let out_dir = std::env::temp_dir().join("nemoir_python_dump_ir");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("python")
+        .arg("--dump-ir")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target python --dump-ir");
+
+    assert!(output.status.success(), "compile --dump-ir should succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ir_version"),
+        "stdout should contain YAML IR"
+    );
+    assert!(
+        stdout.contains("CodingAgent"),
+        "stdout should contain workflow id"
+    );
+
+    // Package should still be written next to the dumped IR.
+    assert!(out_dir.join("coding_agent").join("__init__.py").exists());
+    assert!(out_dir.join("pyproject.toml").exists());
+
+    let _ = std::fs::remove_dir_all(&out_dir);
 }

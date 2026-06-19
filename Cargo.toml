@@ -5,6 +5,7 @@ members = [
     "crates/nemoir-dsl-fe",
     "crates/nemoir-cli",
     "crates/nemoir-backend-visualizer",
+    "crates/nemoir-backend-python",
 ]
 
 [workspace.package]

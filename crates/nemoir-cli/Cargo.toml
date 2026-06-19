@@ -15,3 +15,4 @@ serde_yaml = "0.9"
 nemoir-dsl-fe = { path = "../nemoir-dsl-fe" }
 nemoir-ir = { path = "../nemoir-ir" }
 nemoir-backend-visualizer = { path = "../nemoir-backend-visualizer" }
+nemoir-backend-python = { path = "../nemoir-backend-python" }
