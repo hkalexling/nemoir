@@ -111,7 +111,7 @@ fn generate_coding_agent_package_surface() {
     // __init__.py re-exports
     let init_src = file_content(&pkg, "coding_agent/__init__.py");
     assert!(init_src.contains(
-        "from nemoir_runtime import ModelRouter, RunOptions, Tool, ToolContext, ToolRegistry, tool"
+        "from nemoir_runtime import ModelRouter, RunOptions, Tool, ToolContext, ToolRegistry, WorkflowEvent, tool"
     ));
     assert!(init_src.contains("from coding_agent._agent import Agent"));
     assert!(init_src.contains("from coding_agent._manifest import WORKFLOW_MANIFEST"));
@@ -200,6 +200,20 @@ fn generate_coding_agent_package_surface() {
     assert!(agent.contains(
         "return await self._run_with_executor(inputs, executor=executor, options=options)"
     ));
+
+    // Phase 5: streaming
+    assert!(agent.contains("from collections.abc import AsyncIterator"));
+    assert!(agent.contains("from dataclasses import replace"));
+    assert!(agent.contains("WorkflowEvent"));
+    assert!(agent.contains("async def stream("));
+    assert!(agent.contains("async def _stream_with_executor("));
+    assert!(agent.contains("runtime.stream("));
+    assert!(agent.contains("event.kind == \"run_completed\" and event.result is not None"));
+    assert!(agent.contains("replace(event, result=typed)"));
+
+    // init re-exports WorkflowEvent
+    assert!(init_src.contains("WorkflowEvent"));
+    assert!(init_src.contains("\"WorkflowEvent\""));
 }
 #[test]
 fn generate_minimal_manifest_round_trip() {
