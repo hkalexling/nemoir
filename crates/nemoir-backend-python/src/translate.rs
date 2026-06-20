@@ -238,6 +238,7 @@ pub fn emit_agent_module(
             "\n",
             "from typing import TYPE_CHECKING\n",
             "\n",
+            "from nemoir_runtime import ModelStageExecutor\n",
             "from nemoir_runtime.runtime import RunOptions, StageExecutor, WorkflowRuntime\n",
             "\n",
             "from {pkg}._manifest import (\n",
@@ -274,11 +275,8 @@ pub fn emit_agent_module(
             "        *,\n",
             "        options: RunOptions | None = None,\n",
             "    ) -> AgentResult:\n",
-            "        msg = (\n",
-            "            \"Agent.run() requires the Phase 4 model adapter. \"\n",
-            "            \"For tests, use Agent._run_with_executor(...).\"\n",
-            "        )\n",
-            "        raise NotImplementedError(msg)\n",
+            "        executor = ModelStageExecutor(model=self._model, tools=self._tools)\n",
+            "        return await self._run_with_executor(inputs, executor=executor, options=options)\n",
             "\n",
             "    async def _run_with_executor(\n",
             "        self,\n",
@@ -321,7 +319,7 @@ pub fn emit_init_module(
 ) -> Result<String, PythonBackendError> {
     Ok(format!(
         concat!(
-            "from nemoir_runtime import RunOptions, Tool, ToolContext, ToolRegistry, tool\n",
+            "from nemoir_runtime import ModelRouter, RunOptions, Tool, ToolContext, ToolRegistry, tool\n",
             "\n",
             "from {pkg}._agent import Agent\n",
             "from {pkg}._manifest import WORKFLOW_MANIFEST\n",
@@ -332,6 +330,7 @@ pub fn emit_init_module(
             "    \"AgentInput\",\n",
             "    \"AgentOutput\",\n",
             "    \"AgentResult\",\n",
+            "    \"ModelRouter\",\n",
             "    \"RunOptions\",\n",
             "    \"Tool\",\n",
             "    \"ToolContext\",\n",

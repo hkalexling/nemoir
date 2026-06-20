@@ -110,8 +110,9 @@ fn generate_coding_agent_package_surface() {
 
     // __init__.py re-exports
     let init_src = file_content(&pkg, "coding_agent/__init__.py");
-    assert!(init_src
-        .contains("from nemoir_runtime import RunOptions, Tool, ToolContext, ToolRegistry, tool"));
+    assert!(init_src.contains(
+        "from nemoir_runtime import ModelRouter, RunOptions, Tool, ToolContext, ToolRegistry, tool"
+    ));
     assert!(init_src.contains("from coding_agent._agent import Agent"));
     assert!(init_src.contains("from coding_agent._manifest import WORKFLOW_MANIFEST"));
     assert!(
@@ -122,6 +123,7 @@ fn generate_coding_agent_package_surface() {
         "AgentInput",
         "AgentOutput",
         "AgentResult",
+        "ModelRouter",
         "RunOptions",
         "Tool",
         "ToolRegistry",
@@ -193,10 +195,12 @@ fn generate_coding_agent_package_surface() {
     assert!(agent.contains("\"task\": inputs.task,"));
     assert!(agent.contains("\"cwd\": inputs.cwd,"));
     assert!(agent.contains("summary=output[\"summary\"],"));
-    assert!(agent.contains("raise NotImplementedError(msg)"));
-    assert!(agent.contains("Agent.run() requires the Phase 4 model adapter"));
+    assert!(agent.contains("from nemoir_runtime import ModelStageExecutor"));
+    assert!(agent.contains("executor = ModelStageExecutor(model=self._model, tools=self._tools)"));
+    assert!(agent.contains(
+        "return await self._run_with_executor(inputs, executor=executor, options=options)"
+    ));
 }
-
 #[test]
 fn generate_minimal_manifest_round_trip() {
     let ir = valid_minimal_ir();
