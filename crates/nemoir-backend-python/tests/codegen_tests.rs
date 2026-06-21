@@ -104,7 +104,7 @@ fn generate_coding_agent_package_surface() {
     // pyproject surface
     let pyproject = file_content(&pkg, "pyproject.toml");
     assert!(pyproject.contains("name = \"coding-agent\""));
-    assert!(pyproject.contains("\"nemoir-runtime>=0.1.0\""));
+    assert!(pyproject.contains("\"nemoir-runtime>=0.2.0\""));
     assert!(pyproject.contains("packages = [\"coding_agent\"]"));
     assert!(pyproject.contains("version = \"0.1.0\""));
 
