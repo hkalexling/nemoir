@@ -104,7 +104,7 @@ fn generate_coding_agent_package_surface() {
     // pyproject surface
     let pyproject = file_content(&pkg, "pyproject.toml");
     assert!(pyproject.contains("name = \"coding-agent\""));
-    assert!(pyproject.contains("\"nemoir-runtime>=0.4.1\""));
+    assert!(pyproject.contains("\"nemoir-runtime>=0.5.0\""));
     assert!(pyproject.contains("packages = [\"coding_agent\"]"));
     assert!(pyproject.contains("version = \"0.1.0\""));
 
@@ -196,7 +196,7 @@ fn generate_coding_agent_package_surface() {
     assert!(agent.contains("\"cwd\": inputs.cwd,"));
     assert!(agent.contains("summary=output[\"summary\"],"));
     assert!(agent.contains("from nemoir_runtime import ModelStageExecutor"));
-    assert!(agent.contains("executor = ModelStageExecutor(model=self._model, tools=self._tools)"));
+    assert!(agent.contains("executor = ModelStageExecutor(model=self._model, tools=self._tools, max_tool_rounds=opts.max_tool_rounds)"));
     assert!(agent.contains(
         "return await self._run_with_executor(inputs, executor=executor, options=options)"
     ));

@@ -14,7 +14,7 @@ name = \"{dist}\"\n\
 version = \"{ver}\"\n\
 requires-python = \">=3.11\"\n\
 dependencies = [\n\
-    \"nemoir-runtime>=0.4.1\",\n\
+    \"nemoir-runtime>=0.5.0\",\n\
 ]\n\
 \n\
 [build-system]\n\
@@ -39,7 +39,7 @@ mod tests {
         assert!(s.contains("name = \"coding-agent\""));
         assert!(s.contains("version = \"0.1.0\""));
         assert!(s.contains("requires-python = \">=3.11\""));
-        assert!(s.contains("\"nemoir-runtime>=0.4.1\""));
+        assert!(s.contains("\"nemoir-runtime>=0.5.0\""));
         assert!(s.contains("packages = [\"coding_agent\"]"));
         assert!(s.contains("[build-system]"));
     }
