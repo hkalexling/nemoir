@@ -93,3 +93,15 @@ pub fn get_capability(name: &str) -> Option<&'static CapabilitySpec> {
 pub fn is_known_capability(name: &str) -> bool {
     get_capability(name).is_some()
 }
+
+/// Return the type of a trigger-bound variable for a given capability.
+///
+/// Returns `None` when the capability or parameter is unknown.
+/// Used by IR validation to type-check policy expression method calls.
+pub fn bound_var_type(capability: &str, param_name: &str) -> Option<CapabilityParamType> {
+    let spec = get_capability(capability)?;
+    spec.required_params
+        .iter()
+        .find(|p| p.name == param_name)
+        .map(|p| p.ty)
+}

@@ -40,6 +40,34 @@ test_invalid!(
 );
 test_invalid!(policy_unsupported_method, "policy_unsupported_method.nemo");
 test_invalid!(policy_string_contains, "policy_string_contains.nemo");
+test_invalid!(policy_empty_in, "policy_empty_in.nemo");
+test_invalid!(
+    policy_starts_with_path_receiver,
+    "policy_starts_with_path_receiver.nemo"
+);
+test_invalid!(policy_eq_type_mismatch, "policy_eq_type_mismatch.nemo");
+test_invalid!(
+    policy_starts_with_path_arg,
+    "policy_starts_with_path_arg.nemo"
+);
+test_invalid!(
+    policy_in_option_type_mismatch,
+    "policy_in_option_type_mismatch.nemo"
+);
+test_invalid!(
+    policy_and_nonbool_operand,
+    "policy_and_nonbool_operand.nemo"
+);
+test_invalid!(policy_or_nonbool_operand, "policy_or_nonbool_operand.nemo");
+test_invalid!(
+    policy_contains_bool_receiver,
+    "policy_contains_bool_receiver.nemo"
+);
+test_invalid!(policy_eq_bool_receiver, "policy_eq_bool_receiver.nemo");
+test_invalid!(
+    policy_contains_extra_args,
+    "policy_contains_extra_args.nemo"
+);
 test_invalid!(optional_workflow_input, "optional_workflow_input.nemo");
 test_invalid!(optional_bool_branch, "optional_bool_branch.nemo");
 test_invalid!(multiple_bool_branches, "multiple_bool_branches.nemo");

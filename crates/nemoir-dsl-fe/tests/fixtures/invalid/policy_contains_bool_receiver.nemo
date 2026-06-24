@@ -1,0 +1,24 @@
+workflow Test {
+  input {
+    flag: bool
+  }
+
+  policy {
+    deny os.shell(command) if flag.contains("x")
+  }
+
+  stage@entry Start {
+    prompt: "start"
+    requires: os.shell
+    output: {
+      x: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.x
+    output: {
+      summary: string
+    }
+  }
+}

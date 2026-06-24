@@ -180,15 +180,98 @@ fn policy_source_text(p: &PolicyDecl) -> String {
 fn policy_expr_to_string(expr: &PolicyExpr) -> String {
     match expr {
         PolicyExpr::Not { expr } => format!("not {}", policy_expr_to_string(expr)),
+        PolicyExpr::Or { exprs } => {
+            let parts: Vec<String> = exprs.iter().map(policy_expr_to_string).collect();
+            format!("({})", parts.join(" or "))
+        }
+        PolicyExpr::And { exprs } => {
+            let parts: Vec<String> = exprs.iter().map(policy_expr_to_string).collect();
+            format!("({})", parts.join(" and "))
+        }
         PolicyExpr::MethodCall {
             receiver,
             method,
             args,
         } => {
-            let arg_strs: Vec<String> = args.iter().map(|a| a.text.clone()).collect();
+            let arg_strs: Vec<String> = args.iter().map(policy_expr_value_to_string).collect();
             format!("{}.{}({})", receiver.text, method.text, arg_strs.join(", "))
         }
+        PolicyExpr::In { value, options } => {
+            let opt_strs: Vec<String> = options.iter().map(policy_expr_value_to_string).collect();
+            format!("{} in [{}]", value.text, opt_strs.join(", "))
+        }
         PolicyExpr::Ref(id) => id.text.clone(),
+    }
+}
+
+fn policy_expr_value_to_string(val: &PolicyExprValue) -> String {
+    match val {
+        PolicyExprValue::Ref(id) => id.text.clone(),
+        PolicyExprValue::String(s) => format!("\"{}\"", s.value),
+    }
+}
+
+fn lower_policy_expr(expr: &PolicyExpr, bound_names: &HashSet<String>) -> Expr {
+    match expr {
+        PolicyExpr::Not { expr } => Expr::Not {
+            expr: Box::new(lower_policy_expr(expr, bound_names)),
+        },
+        PolicyExpr::Or { exprs } => Expr::Or {
+            exprs: exprs
+                .iter()
+                .map(|e| lower_policy_expr(e, bound_names))
+                .collect(),
+        },
+        PolicyExpr::And { exprs } => Expr::And {
+            exprs: exprs
+                .iter()
+                .map(|e| lower_policy_expr(e, bound_names))
+                .collect(),
+        },
+        PolicyExpr::In { value, options } => {
+            let lhs = Expr::Ref {
+                r#ref: classify_ref_name(&value.text, bound_names),
+            };
+            let disjuncts: Vec<Expr> = options
+                .iter()
+                .map(|opt| Expr::MethodCall {
+                    receiver: Box::new(lhs.clone()),
+                    method: "eq".to_string(),
+                    args: vec![lower_value(opt, bound_names)],
+                })
+                .collect();
+            if disjuncts.len() == 1 {
+                disjuncts.into_iter().next().unwrap()
+            } else {
+                Expr::Or { exprs: disjuncts }
+            }
+        }
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: classify_ref_name(&receiver.text, bound_names),
+            }),
+            method: method.text.clone(),
+            args: args.iter().map(|a| lower_value(a, bound_names)).collect(),
+        },
+        PolicyExpr::Ref(id) => Expr::Ref {
+            r#ref: classify_ref_name(&id.text, bound_names),
+        },
+    }
+}
+
+fn lower_value(val: &PolicyExprValue, bound_names: &HashSet<String>) -> Expr {
+    match val {
+        PolicyExprValue::Ref(id) => Expr::Ref {
+            r#ref: classify_ref_name(&id.text, bound_names),
+        },
+        PolicyExprValue::String(s) => Expr::Literal {
+            ty: "string".to_string(),
+            value: serde_yaml::Value::String(s.value.clone()),
+        },
     }
 }
 
@@ -201,33 +284,6 @@ fn classify_ref_name(name: &str, bound_names: &HashSet<String>) -> Ref {
         Ref::Input {
             name: name.to_string(),
         }
-    }
-}
-
-fn lower_policy_expr(expr: &PolicyExpr, bound_names: &HashSet<String>) -> Expr {
-    match expr {
-        PolicyExpr::Not { expr } => Expr::Not {
-            expr: Box::new(lower_policy_expr(expr, bound_names)),
-        },
-        PolicyExpr::MethodCall {
-            receiver,
-            method,
-            args,
-        } => Expr::MethodCall {
-            receiver: Box::new(Expr::Ref {
-                r#ref: classify_ref_name(&receiver.text, bound_names),
-            }),
-            method: method.text.clone(),
-            args: args
-                .iter()
-                .map(|a| Expr::Ref {
-                    r#ref: classify_ref_name(&a.text, bound_names),
-                })
-                .collect(),
-        },
-        PolicyExpr::Ref(id) => Expr::Ref {
-            r#ref: classify_ref_name(&id.text, bound_names),
-        },
     }
 }
 

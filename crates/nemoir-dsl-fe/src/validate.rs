@@ -187,8 +187,21 @@ fn validate_policies(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagno
         }
 
         if let Some(ref condition) = policy.condition {
-            validate_policy_expr(condition, &input_names, &bound_vars, &input_types, filename)?;
-            let cond_ty = type_of_policy_expr(condition, &input_names, &bound_vars, &input_types);
+            validate_policy_expr(
+                condition,
+                &input_names,
+                &bound_vars,
+                &input_types,
+                &policy.trigger.capability.text,
+                filename,
+            )?;
+            let cond_ty = type_of_policy_expr(
+                condition,
+                &input_names,
+                &bound_vars,
+                &input_types,
+                &policy.trigger.capability.text,
+            );
             if !matches!(cond_ty, Some(BaseType::Bool)) {
                 let (span_start, span_end) = policy_expr_first_span(condition);
                 return Err(Diagnostic::TypeError(TypeError {
@@ -211,12 +224,26 @@ fn validate_policy_expr(
     input_names: &HashSet<&str>,
     bound_vars: &HashSet<&str>,
     input_types: &HashMap<&str, BaseType>,
+    trigger_capability: &str,
     filename: &str,
 ) -> Result<(), Diagnostic> {
     match expr {
         PolicyExpr::Not { expr } => {
-            validate_policy_expr(expr, input_names, bound_vars, input_types, filename)?;
-            let inner_ty = type_of_policy_expr(expr, input_names, bound_vars, input_types);
+            validate_policy_expr(
+                expr,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+                filename,
+            )?;
+            let inner_ty = type_of_policy_expr(
+                expr,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
             if !matches!(inner_ty, Some(BaseType::Bool)) {
                 let (span_start, span_end) = policy_expr_first_span(expr);
                 return Err(Diagnostic::TypeError(TypeError {
@@ -229,9 +256,47 @@ fn validate_policy_expr(
                 }));
             }
         }
+        PolicyExpr::Or { exprs } | PolicyExpr::And { exprs } => {
+            if exprs.is_empty() {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "and/or requires at least 1 operand".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            for e in exprs {
+                validate_policy_expr(
+                    e,
+                    input_names,
+                    bound_vars,
+                    input_types,
+                    trigger_capability,
+                    filename,
+                )?;
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = type_of_policy_expr(
+                    e,
+                    input_names,
+                    bound_vars,
+                    input_types,
+                    trigger_capability,
+                );
+                if !matches!(op_ty, Some(BaseType::Bool)) {
+                    let (span_start, span_end) = policy_expr_first_span(e);
+                    return Err(Diagnostic::TypeError(TypeError {
+                        message: format!(
+                            "and/or requires bool operands, but got `{}`",
+                            policy_expr_type_name(op_ty)
+                        ),
+                        filename: filename.to_string(),
+                        label: Some((span_start, span_end, "this operand".into())),
+                    }));
+                }
+            }
+        }
         PolicyExpr::MethodCall {
             receiver,
-            method: _,
+            method,
             args,
         } => {
             if !input_names.contains(receiver.text.as_str())
@@ -252,21 +317,201 @@ fn validate_policy_expr(
                 }));
             }
             for arg in args {
-                if !input_names.contains(arg.text.as_str())
-                    && !bound_vars.contains(arg.text.as_str())
-                {
+                validate_policy_expr_value(arg, input_names, bound_vars, filename)?;
+            }
+            // Method and type validation
+            let recv_ty = infer_receiver_type(
+                receiver,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            match method.text.as_str() {
+                "contains" => {
+                    // Plan §5: contains accepts exactly 1 argument.
+                    if args.len() != 1 {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "contains() requires exactly 1 argument".into(),
+                            filename: filename.to_string(),
+                            label: Some((method.span.start, method.span.end, "this method".into())),
+                        }));
+                    }
+                    let arg_ty = policy_expr_value_type(
+                        &args[0],
+                        input_names,
+                        bound_vars,
+                        input_types,
+                        trigger_capability,
+                    );
+                    // Plan §5: only Path.contains(Path|string) and string.contains(string) are supported.
+                    match recv_ty {
+                        Some(BaseType::Path) => {
+                            if arg_ty != Some(BaseType::Path) && arg_ty != Some(BaseType::String) {
+                                return Err(Diagnostic::TypeError(TypeError {
+                                    message: "path.contains() argument must be path or string"
+                                        .into(),
+                                    filename: filename.to_string(),
+                                    label: None,
+                                }));
+                            }
+                        }
+                        Some(BaseType::String) => {
+                            if arg_ty != Some(BaseType::String) {
+                                return Err(Diagnostic::TypeError(TypeError {
+                                    message: "string.contains() argument must be string".into(),
+                                    filename: filename.to_string(),
+                                    label: None,
+                                }));
+                            }
+                        }
+                        // Plan §5: bool and unknown receiver types are unsupported.
+                        Some(BaseType::Bool) | Some(BaseType::Unknown) | None => {
+                            return Err(Diagnostic::TypeError(TypeError {
+                                message: format!(
+                                    "contains() is not supported on receiver type {:?}",
+                                    recv_ty
+                                ),
+                                filename: filename.to_string(),
+                                label: None,
+                            }));
+                        }
+                    }
+                }
+                "eq" => {
+                    if args.len() != 1 {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "eq() requires exactly 1 argument".into(),
+                            filename: filename.to_string(),
+                            label: Some((method.span.start, method.span.end, "this method".into())),
+                        }));
+                    }
+                    let arg_ty = policy_expr_value_type(
+                        &args[0],
+                        input_names,
+                        bound_vars,
+                        input_types,
+                        trigger_capability,
+                    );
+                    // Plan §5: Path.eq(Path/string) allowed; string.eq(string) allowed;
+                    // string.eq(Path) and all other combinations (bool, unknown, etc.) rejected.
+                    let compatible = match (recv_ty, arg_ty) {
+                        (Some(BaseType::Path), Some(BaseType::Path))
+                        | (Some(BaseType::Path), Some(BaseType::String)) => true,
+                        (Some(BaseType::String), Some(BaseType::String)) => true,
+                        (Some(BaseType::String), Some(BaseType::Path)) => false,
+                        _ => false, // Plan §5: no other type combinations are supported for eq
+                    };
+                    if !compatible {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: format!(
+                                "eq() compares incompatible types: {:?} vs {:?}",
+                                recv_ty, arg_ty
+                            ),
+                            filename: filename.to_string(),
+                            label: None,
+                        }));
+                    }
+                }
+                "starts_with" => {
+                    if args.len() != 1 {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "starts_with() requires exactly 1 argument".into(),
+                            filename: filename.to_string(),
+                            label: Some((method.span.start, method.span.end, "this method".into())),
+                        }));
+                    }
+                    if recv_ty != Some(BaseType::String) && recv_ty.is_some() {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "starts_with() requires a string receiver".into(),
+                            filename: filename.to_string(),
+                            label: None,
+                        }));
+                    }
+                    let arg_ty = policy_expr_value_type(
+                        &args[0],
+                        input_names,
+                        bound_vars,
+                        input_types,
+                        trigger_capability,
+                    );
+                    if arg_ty != Some(BaseType::String) && arg_ty.is_some() {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "starts_with() requires a string argument".into(),
+                            filename: filename.to_string(),
+                            label: None,
+                        }));
+                    }
+                }
+                _ => {
                     return Err(Diagnostic::NameError(NameError {
                         message: format!(
-                            "unknown ref `{}` in policy expression; expected a workflow input or bound variable",
-                            arg.text
+                            "unknown method `{}`; expected contains, eq, or starts_with",
+                            method.text
                         ),
                         filename: filename.to_string(),
-                        label: Some((
-                            arg.span.start,
-                            arg.span.end,
-                            format!("`{}` is not a workflow input or bound variable", arg.text),
-                        )),
+                        label: Some((method.span.start, method.span.end, "this method".into())),
                         help: None,
+                    }));
+                }
+            }
+        }
+        PolicyExpr::In { value, options } => {
+            if !input_names.contains(value.text.as_str())
+                && !bound_vars.contains(value.text.as_str())
+            {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!("unknown ref `{}` in `in [...]` expression", value.text),
+                    filename: filename.to_string(),
+                    label: Some((
+                        value.span.start,
+                        value.span.end,
+                        format!("`{}` is not a workflow input or bound variable", value.text),
+                    )),
+                    help: None,
+                }));
+            }
+            if options.is_empty() {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "`in []` is empty; must have at least one option".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            // Check each option's type against the LHS value ({eq} compatibility).
+            let val_ty = infer_receiver_type(
+                value,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            for opt in options {
+                validate_policy_expr_value(opt, input_names, bound_vars, filename)?;
+                let opt_ty = policy_expr_value_type(
+                    opt,
+                    input_names,
+                    bound_vars,
+                    input_types,
+                    trigger_capability,
+                );
+                // Apply the same compatibility rules as eq():
+                // path value accepts path/string; string value accepts only string
+                let compatible = match (val_ty, opt_ty) {
+                    (Some(BaseType::Path), Some(BaseType::Path))
+                    | (Some(BaseType::Path), Some(BaseType::String)) => true,
+                    (Some(BaseType::String), Some(BaseType::String)) => true,
+                    (Some(BaseType::String), Some(BaseType::Path)) => false,
+                    _ => false, // Plan §5: no other type combinations for eq
+                };
+                if !compatible {
+                    return Err(Diagnostic::TypeError(TypeError {
+                        message: format!(
+                            "`in [...]` option type incompatible with `{}`: {:?} vs {:?}",
+                            value.text, val_ty, opt_ty
+                        ),
+                        filename: filename.to_string(),
+                        label: None,
                     }));
                 }
             }
@@ -295,36 +540,114 @@ fn validate_policy_expr(
     Ok(())
 }
 
+fn validate_policy_expr_value(
+    val: &PolicyExprValue,
+    input_names: &HashSet<&str>,
+    bound_vars: &HashSet<&str>,
+    filename: &str,
+) -> Result<(), Diagnostic> {
+    if let PolicyExprValue::Ref(id) = val {
+        if !input_names.contains(id.text.as_str()) && !bound_vars.contains(id.text.as_str()) {
+            return Err(Diagnostic::NameError(NameError {
+                message: format!(
+                    "unknown ref `{}` in policy expression; expected a workflow input or bound variable",
+                    id.text
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    id.span.start,
+                    id.span.end,
+                    format!("`{}` is not a workflow input or bound variable", id.text),
+                )),
+                help: None,
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn policy_expr_value_type(
+    val: &PolicyExprValue,
+    _input_names: &HashSet<&str>,
+    bound_vars: &HashSet<&str>,
+    input_types: &HashMap<&str, BaseType>,
+    trigger_capability: &str,
+) -> Option<BaseType> {
+    match val {
+        PolicyExprValue::Ref(id) => {
+            if bound_vars.contains(id.text.as_str()) {
+                // Bound variables: look up type from the capability catalog
+                nemoir_ir::capabilities::bound_var_type(trigger_capability, &id.text).map(|t| {
+                    match t {
+                        nemoir_ir::capabilities::CapabilityParamType::String => BaseType::String,
+                        nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
+                        nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+                    }
+                })
+            } else {
+                input_types.get(id.text.as_str()).copied()
+            }
+        }
+        PolicyExprValue::String(_) => Some(BaseType::String),
+    }
+}
+
+fn infer_receiver_type(
+    receiver: &Ident,
+    input_names: &HashSet<&str>,
+    bound_vars: &HashSet<&str>,
+    input_types: &HashMap<&str, BaseType>,
+    trigger_capability: &str,
+) -> Option<BaseType> {
+    if input_names.contains(receiver.text.as_str()) {
+        input_types.get(receiver.text.as_str()).copied()
+    } else if bound_vars.contains(receiver.text.as_str()) {
+        // Bound variable: look up type from the capability catalog
+        nemoir_ir::capabilities::bound_var_type(trigger_capability, &receiver.text).map(|t| match t
+        {
+            nemoir_ir::capabilities::CapabilityParamType::String => BaseType::String,
+            nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
+            nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+        })
+    } else {
+        None
+    }
+}
+
 fn type_of_policy_expr(
     expr: &PolicyExpr,
     _input_names: &HashSet<&str>,
     bound_vars: &HashSet<&str>,
     input_types: &HashMap<&str, BaseType>,
+    trigger_capability: &str,
 ) -> Option<BaseType> {
     match expr {
-        PolicyExpr::Not { .. } => Some(BaseType::Bool),
-        PolicyExpr::MethodCall {
-            receiver,
-            method,
-            args: _,
-        } => {
-            if method.text == "contains" {
-                let recv_is_bound = bound_vars.contains(receiver.text.as_str());
-                if recv_is_bound {
-                    // Bound variable: type is unknown, allow per plan's "path.contains(any)"
-                    Some(BaseType::Bool)
-                } else {
-                    let recv_ty = input_types.get(receiver.text.as_str());
-                    match recv_ty {
-                        Some(BaseType::Path) => Some(BaseType::Bool),
-                        _ => None,
-                    }
-                }
-            } else {
-                None
-            }
+        PolicyExpr::Not { .. } | PolicyExpr::Or { .. } | PolicyExpr::And { .. } => {
+            Some(BaseType::Bool)
         }
-        PolicyExpr::Ref(id) => input_types.get(id.text.as_str()).copied(),
+        PolicyExpr::In { .. } => Some(BaseType::Bool),
+        PolicyExpr::MethodCall { method, .. } => match method.text.as_str() {
+            "contains" | "eq" | "starts_with" => Some(BaseType::Bool),
+            _ => None,
+        },
+        PolicyExpr::Ref(id) => {
+            // Check workflow inputs first, then bound trigger variables.
+            input_types.get(id.text.as_str()).copied().or_else(|| {
+                if bound_vars.contains(id.text.as_str()) {
+                    nemoir_ir::capabilities::bound_var_type(trigger_capability, &id.text).map(|t| {
+                        match t {
+                            nemoir_ir::capabilities::CapabilityParamType::String => {
+                                BaseType::String
+                            }
+                            nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
+                            nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+                        }
+                    })
+                } else {
+                    None
+                }
+            })
+        }
     }
 }
 
@@ -341,7 +664,9 @@ fn policy_expr_type_name(ty: Option<BaseType>) -> &'static str {
 fn policy_expr_first_span(expr: &PolicyExpr) -> (usize, usize) {
     match expr {
         PolicyExpr::Not { expr } => policy_expr_first_span(expr),
+        PolicyExpr::Or { exprs } | PolicyExpr::And { exprs } => policy_expr_first_span(&exprs[0]),
         PolicyExpr::MethodCall { receiver, .. } => (receiver.span.start, receiver.span.end),
+        PolicyExpr::In { value, .. } => (value.span.start, value.span.end),
         PolicyExpr::Ref(id) => (id.span.start, id.span.end),
     }
 }

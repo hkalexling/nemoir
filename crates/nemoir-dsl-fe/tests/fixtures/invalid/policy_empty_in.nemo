@@ -1,0 +1,21 @@
+workflow Test {
+  input {
+    candidate_path: path
+  }
+  policy {
+    deny fs.write(path) if not path in []
+  }
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      x: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.x
+    output: {
+      summary: string
+    }
+  }
+}

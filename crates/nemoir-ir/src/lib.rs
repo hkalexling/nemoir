@@ -192,4 +192,14 @@ pub enum Expr {
         ty: String,
         value: serde_yaml::Value,
     },
+    #[serde(rename = "and")]
+    And {
+        #[serde(default)]
+        exprs: Vec<Expr>,
+    },
+    #[serde(rename = "or")]
+    Or {
+        #[serde(default)]
+        exprs: Vec<Expr>,
+    },
 }

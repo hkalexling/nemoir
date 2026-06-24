@@ -1,0 +1,21 @@
+workflow Test {
+  input {
+    cwd: path
+  }
+  policy {
+    deny os.shell(command) if command in [cwd]
+  }
+  stage@entry Start {
+    prompt: "start"
+    output: {
+      x: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.x
+    output: {
+      summary: string
+    }
+  }
+}

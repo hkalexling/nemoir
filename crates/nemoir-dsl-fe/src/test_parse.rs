@@ -170,4 +170,61 @@ line 2"""
             "no annotations parsed"
         );
     }
+
+    #[test]
+    fn test_parse_policy_parens_and_or() {
+        let input = r#"workflow Test {
+  input { command: string }
+  policy {
+    deny os.shell(command) if not (command.eq("python harness/preflight.py") or command.starts_with("git commit -m "))
+  }
+  stage@entry S { prompt: "x" output: { x: string } }
+  stage@exit F { prompt: "d" input: S.x output: { summary: string } }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        assert_eq!(ast.policies.len(), 1);
+        let cond = ast.policies[0]
+            .condition
+            .as_ref()
+            .expect("should have condition");
+        // Should parse as Not(Or(eq(...), starts_with(...)))
+        if let crate::ast::PolicyExpr::Not { expr } = cond {
+            if let crate::ast::PolicyExpr::Or { exprs } = expr.as_ref() {
+                assert_eq!(exprs.len(), 2, "should have 2 disjuncts");
+            } else {
+                panic!("expected Or, got {:?}", expr);
+            }
+        } else {
+            panic!("expected Not, got {:?}", cond);
+        }
+    }
+
+    #[test]
+    fn test_parse_policy_in_with_ref_and_string() {
+        let input = r#"workflow Test {
+  input { candidate_path: path }
+  policy {
+    deny fs.write(path) if not path in [candidate_path, "candidate_bak.py"]
+  }
+  stage@entry S { prompt: "x" output: { x: string } }
+  stage@exit F { prompt: "d" input: S.x output: { summary: string } }
+}"#;
+        let ast = parse::parse_source(input, "test.nemo").expect("parse should succeed");
+        assert_eq!(ast.policies.len(), 1);
+        let cond = ast.policies[0]
+            .condition
+            .as_ref()
+            .expect("should have condition");
+        // Should parse as Not(In(value=path, options=[candidate_path, "candidate_bak.py"]))
+        if let crate::ast::PolicyExpr::Not { expr } = cond {
+            if let crate::ast::PolicyExpr::In { value, options } = expr.as_ref() {
+                assert_eq!(value.text, "path");
+                assert_eq!(options.len(), 2);
+            } else {
+                panic!("expected In, got {:?}", expr);
+            }
+        } else {
+            panic!("expected Not, got {:?}", cond);
+        }
+    }
 }

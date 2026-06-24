@@ -173,5 +173,13 @@ fn expr_summary(e: &Expr) -> String {
             serde_yaml::Value::String(s) => format!("\"{}\"", s),
             _ => "?".to_string(),
         },
+        Expr::And { exprs } => {
+            let parts: Vec<String> = exprs.iter().map(expr_summary).collect();
+            format!("({})", parts.join(" and "))
+        }
+        Expr::Or { exprs } => {
+            let parts: Vec<String> = exprs.iter().map(expr_summary).collect();
+            format!("({})", parts.join(" or "))
+        }
     }
 }

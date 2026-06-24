@@ -30,6 +30,7 @@ pub fn parse_source(source: &str, filename: &str) -> Result<WorkflowAst, Diagnos
                         Rule::input_field => "an input field (name: type)",
                         Rule::policy_block => "policy { ... }",
                         Rule::policy_expr => "a policy condition",
+                        Rule::policy_value => "an identifier or string literal",
                         Rule::stage => "stage declaration",
                         Rule::stage_body_item => "prompt:, input:, output:, or requires:",
                         Rule::prompt_decl => "prompt:",
@@ -213,55 +214,140 @@ fn parse_before_policy(pair: pest::iterators::Pair<Rule>) -> PolicyDecl {
 }
 
 fn parse_policy_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
-    let inner = pair.into_inner();
-    let mut has_not = false;
+    // policy_expr -> policy_or
+    let inner = pair.into_inner().next().expect("policy_or");
+    parse_policy_or(inner)
+}
 
-    let items: Vec<_> = inner.collect();
-
-    let mut idx = 0;
-
-    if idx < items.len() && items[idx].as_rule() == Rule::not_kw {
-        has_not = true;
+fn parse_policy_or(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    if items.is_empty() {
+        return PolicyExpr::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        });
+    }
+    // First is always policy_and, then pairs of (or_kw, policy_and)
+    let mut exprs = vec![parse_policy_and(items[0].clone())];
+    let mut idx = 1;
+    while idx < items.len() {
+        // skip or_kw, parse next policy_and
+        idx += 1;
+        exprs.push(parse_policy_and(items[idx].clone()));
         idx += 1;
     }
+    if exprs.len() == 1 {
+        exprs.into_iter().next().unwrap()
+    } else {
+        PolicyExpr::Or { exprs }
+    }
+}
 
-    let receiver = parse_ident(items[idx].clone());
-    idx += 1;
-
-    let mut method_call = None;
-
+fn parse_policy_and(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    if items.is_empty() {
+        return PolicyExpr::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        });
+    }
+    // First is always policy_not, then pairs of (and_kw, policy_not)
+    let mut exprs = vec![parse_policy_not(items[0].clone())];
+    let mut idx = 1;
     while idx < items.len() {
-        if items[idx].as_rule() == Rule::dot {
-            idx += 1;
-            let method = parse_ident(items[idx].clone());
-            idx += 1;
-            let mut args = Vec::new();
-            while idx < items.len() {
-                args.push(parse_ident(items[idx].clone()));
-                idx += 1;
+        // skip and_kw, parse next policy_not
+        idx += 1;
+        exprs.push(parse_policy_not(items[idx].clone()));
+        idx += 1;
+    }
+    if exprs.len() == 1 {
+        exprs.into_iter().next().unwrap()
+    } else {
+        PolicyExpr::And { exprs }
+    }
+}
+
+fn parse_policy_not(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    let mut not_count = 0usize;
+    let mut idx = 0;
+    while idx < items.len() && items[idx].as_rule() == Rule::not_kw {
+        not_count += 1;
+        idx += 1;
+    }
+    let primary = parse_policy_primary(items[idx].clone());
+    (0..not_count).fold(primary, |acc, _| PolicyExpr::Not {
+        expr: Box::new(acc),
+    })
+}
+
+fn parse_policy_primary(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let inner = pair.into_inner().next().expect("policy_primary inner");
+    match inner.as_rule() {
+        Rule::policy_ref => PolicyExpr::Ref(parse_ident(inner.into_inner().next().expect("ident"))),
+        Rule::call_or_in => {
+            let mut ci = inner.into_inner();
+            let ident_pair = ci.next().expect("ident");
+            let ident = parse_ident(ident_pair);
+            let next = ci.next().expect("dot/in");
+            match next.as_rule() {
+                Rule::dot => {
+                    let method = parse_ident(ci.next().expect("method"));
+                    let args = if let Some(arg_list) = ci.next() {
+                        parse_policy_arg_list(arg_list)
+                    } else {
+                        Vec::new()
+                    };
+                    PolicyExpr::MethodCall {
+                        receiver: ident,
+                        method,
+                        args,
+                    }
+                }
+                Rule::policy_array => {
+                    // "in" branch: next IS the policy_array (the "in" literal is silent)
+                    let options = parse_policy_array(next);
+                    PolicyExpr::In {
+                        value: ident,
+                        options,
+                    }
+                }
+                _ => {
+                    // Unexpected token after ident in call_or_in
+                    PolicyExpr::Ref(ident)
+                }
             }
-            method_call = Some((method, args));
-        } else {
-            idx += 1;
+        }
+        _ => {
+            // Parenthesized: "(" ~ policy_expr ~ ")"
+            // inner IS the policy_expr pair (the parens are silent literals)
+            parse_policy_expr(inner)
         }
     }
+}
 
-    let base = if let Some((method, args)) = method_call {
-        PolicyExpr::MethodCall {
-            receiver,
-            method,
-            args,
-        }
-    } else {
-        PolicyExpr::Ref(receiver)
-    };
+fn parse_policy_arg_list(pair: pest::iterators::Pair<Rule>) -> Vec<PolicyExprValue> {
+    pair.into_inner().map(|p| parse_policy_value(p)).collect()
+}
 
-    if has_not {
-        PolicyExpr::Not {
-            expr: Box::new(base),
+fn parse_policy_array(pair: pest::iterators::Pair<Rule>) -> Vec<PolicyExprValue> {
+    pair.into_inner().map(|p| parse_policy_value(p)).collect()
+}
+
+fn parse_policy_value(pair: pest::iterators::Pair<Rule>) -> PolicyExprValue {
+    let inner = pair.into_inner().next();
+    match inner {
+        Some(p) if p.as_rule() == Rule::ident => PolicyExprValue::Ref(parse_ident(p)),
+        Some(p) if p.as_rule() == Rule::single_line_string => {
+            let raw = p.as_str();
+            let processed = process_policy_string_literal(raw);
+            let span = span_from_pair(&p);
+            PolicyExprValue::String(Spanned::new(processed, span))
         }
-    } else {
-        base
+        _ => PolicyExprValue::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        }),
     }
 }
 
@@ -443,4 +529,14 @@ pub fn process_string(raw: &str) -> String {
             trimmed.to_string()
         }
     }
+}
+
+/// Unescape a policy string literal: strip surrounding `"` quotes and
+/// unescape `\"` sequences.  Unlike `process_string`, this does **not**
+/// trim the content — significant leading/trailing whitespace is preserved
+/// for shell-command prefix and metacharacter predicates.
+pub fn process_policy_string_literal(raw: &str) -> String {
+    debug_assert!(raw.starts_with('"') && raw.ends_with('"'));
+    let inner = &raw[1..raw.len() - 1];
+    inner.replace("\\\"", "\"")
 }

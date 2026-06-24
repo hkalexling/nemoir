@@ -488,6 +488,36 @@ pub fn emit_expr(expr: &Expr) -> Result<String, PythonBackendError> {
                 args_src
             ))
         }
+        Expr::And { exprs } => {
+            let mut s = String::from("ExprSpec(kind=\"and\", exprs=(");
+            for (i, e) in exprs.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&emit_expr(e)?);
+            }
+            if exprs.len() == 1 {
+                s.push(',');
+            }
+            s.push(')');
+            s.push(')');
+            Ok(s)
+        }
+        Expr::Or { exprs } => {
+            let mut s = String::from("ExprSpec(kind=\"or\", exprs=(");
+            for (i, e) in exprs.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&emit_expr(e)?);
+            }
+            if exprs.len() == 1 {
+                s.push(',');
+            }
+            s.push(')');
+            s.push(')');
+            Ok(s)
+        }
     }
 }
 
@@ -1208,5 +1238,41 @@ mod tests {
         assert!(!s.contains("annotations"));
         assert!(!s.contains("entry"));
         assert!(!s.contains("extra"));
+    }
+
+    #[test]
+    fn emit_expr_and_or_emits_exprs_tuple() {
+        // Expr::And with 2 operands
+        let and_expr = Expr::And {
+            exprs: vec![
+                Expr::Ref {
+                    r#ref: ref_input("a"),
+                },
+                Expr::Literal {
+                    ty: "string".into(),
+                    value: serde_yaml::Value::String("x".into()),
+                },
+            ],
+        };
+        let s = emit_expr(&and_expr).unwrap();
+        assert!(s.starts_with("ExprSpec(kind=\"and\", exprs=("));
+        assert!(s.contains("kind=\"ref\""));
+        assert!(s.contains("kind=\"literal\""));
+        assert!(s.ends_with("))"));
+
+        // Expr::Or with 1 operand — must have trailing comma for 1-tuple
+        let or_expr = Expr::Or {
+            exprs: vec![Expr::Ref {
+                r#ref: ref_input("b"),
+            }],
+        };
+        let s = emit_expr(&or_expr).unwrap();
+        assert!(s.starts_with("ExprSpec(kind=\"or\", exprs=("));
+        // Single-element exprs must be a 1-tuple: (e,)
+        assert!(
+            s.contains("exprs=(ExprSpec(kind=\"ref\", ref=RefSpec(kind=\"input\", name=\"b\")),)"),
+            "single-element exprs must have trailing comma for 1-tuple: {}",
+            s
+        );
     }
 }

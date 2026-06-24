@@ -25,8 +25,8 @@ fn catalog_get_capability_returns_specs() {
     assert_eq!(spec.required_params[0].ty, CapabilityParamType::String);
 
     assert!(get_capability("made.up").is_none());
-    assert_eq!(is_known_capability("fs.read"), true);
-    assert_eq!(is_known_capability("made.up"), false);
+    assert!(is_known_capability("fs.read"));
+    assert!(!is_known_capability("made.up"));
 }
 
 #[test]
@@ -811,4 +811,633 @@ fn policy_require_arg_valid_bound_passes() {
         condition: None,
     }];
     assert_valid(&ir);
+}
+
+// ---------------------------------------------------------------------------
+// Policy expression predicate tests (Phase 1: And/Or, eq, starts_with)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn policy_condition_and_or_passes() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::Or {
+            exprs: vec![
+                Expr::MethodCall {
+                    receiver: Box::new(Expr::Ref {
+                        r#ref: Ref::Bound {
+                            name: "command".into(),
+                        },
+                    }),
+                    method: "eq".into(),
+                    args: vec![Expr::Literal {
+                        ty: "string".into(),
+                        value: serde_yaml::Value::String("a".into()),
+                    }],
+                },
+                Expr::MethodCall {
+                    receiver: Box::new(Expr::Ref {
+                        r#ref: Ref::Bound {
+                            name: "command".into(),
+                        },
+                    }),
+                    method: "starts_with".into(),
+                    args: vec![Expr::Literal {
+                        ty: "string".into(),
+                        value: serde_yaml::Value::String("python".into()),
+                    }],
+                },
+            ],
+        }),
+    }];
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_condition_in_lowered_to_or_passes() {
+    // Direct IR test: hand-built Or of two eq method calls (what `in [...]` lowers to)
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::And {
+            exprs: vec![Expr::Not {
+                expr: Box::new(Expr::Or {
+                    exprs: vec![
+                        Expr::MethodCall {
+                            receiver: Box::new(Expr::Ref {
+                                r#ref: Ref::Bound {
+                                    name: "command".into(),
+                                },
+                            }),
+                            method: "eq".into(),
+                            args: vec![Expr::Literal {
+                                ty: "string".into(),
+                                value: serde_yaml::Value::String("a".into()),
+                            }],
+                        },
+                        Expr::MethodCall {
+                            receiver: Box::new(Expr::Ref {
+                                r#ref: Ref::Bound {
+                                    name: "command".into(),
+                                },
+                            }),
+                            method: "eq".into(),
+                            args: vec![Expr::Literal {
+                                ty: "string".into(),
+                                value: serde_yaml::Value::String("b".into()),
+                            }],
+                        },
+                    ],
+                }),
+            }],
+        }),
+    }];
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_condition_empty_and_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::And { exprs: vec![] }),
+    }];
+    assert_invalid(&ir, "requires at least 1 operand");
+}
+
+#[test]
+fn policy_condition_empty_or_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::Or { exprs: vec![] }),
+    }];
+    assert_invalid(&ir, "requires at least 1 operand");
+}
+
+#[test]
+fn policy_condition_unknown_method_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Bound {
+                    name: "command".into(),
+                },
+            }),
+            method: "bogus".into(),
+            args: vec![Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("x".into()),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "unknown method");
+}
+
+#[test]
+fn policy_deny_without_condition_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: Default::default(),
+        },
+        requires: None,
+        condition: None,
+    }];
+    assert_invalid(&ir, "deny policy must have a condition");
+}
+
+#[test]
+fn policy_before_with_condition_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "before".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: Default::default(),
+        },
+        requires: None,
+        condition: Some(Expr::Literal {
+            ty: "bool".into(),
+            value: serde_yaml::Value::Bool(true),
+        }),
+    }];
+    assert_invalid(&ir, "before policy must not have a condition");
+}
+
+#[test]
+fn policy_eq_type_mismatch_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.inputs.push(Input {
+        id: "cwd".into(),
+        ty: "path".into(),
+    });
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Bound {
+                    name: "command".into(),
+                },
+            }),
+            method: "eq".into(),
+            args: vec![Expr::Ref {
+                r#ref: Ref::Input { name: "cwd".into() },
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "incompatible types");
+}
+
+#[test]
+fn policy_starts_with_non_string_receiver_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("fs.write".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "fs.write".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "path".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "path".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Bound {
+                    name: "path".into(),
+                },
+            }),
+            method: "starts_with".into(),
+            args: vec![Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("x".into()),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "string receiver");
+}
+
+#[test]
+fn policy_eq_string_exact_passes() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::Not {
+            expr: Box::new(Expr::MethodCall {
+                receiver: Box::new(Expr::Ref {
+                    r#ref: Ref::Bound {
+                        name: "command".into(),
+                    },
+                }),
+                method: "eq".into(),
+                args: vec![Expr::Literal {
+                    ty: "string".into(),
+                    value: serde_yaml::Value::String("exact".into()),
+                }],
+            }),
+        }),
+    }];
+    assert_valid(&ir);
+}
+
+#[test]
+fn policy_and_nonbool_operand_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::And {
+            exprs: vec![
+                Expr::Ref {
+                    r#ref: Ref::Bound {
+                        name: "command".into(),
+                    },
+                },
+                Expr::MethodCall {
+                    receiver: Box::new(Expr::Ref {
+                        r#ref: Ref::Bound {
+                            name: "command".into(),
+                        },
+                    }),
+                    method: "eq".into(),
+                    args: vec![Expr::Literal {
+                        ty: "string".into(),
+                        value: serde_yaml::Value::String("x".into()),
+                    }],
+                },
+            ],
+        }),
+    }];
+    assert_invalid(&ir, "and operand must be bool");
+}
+
+#[test]
+fn policy_or_nonbool_operand_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::Or {
+            exprs: vec![
+                Expr::Ref {
+                    r#ref: Ref::Bound {
+                        name: "command".into(),
+                    },
+                },
+                Expr::MethodCall {
+                    receiver: Box::new(Expr::Ref {
+                        r#ref: Ref::Bound {
+                            name: "command".into(),
+                        },
+                    }),
+                    method: "starts_with".into(),
+                    args: vec![Expr::Literal {
+                        ty: "string".into(),
+                        value: serde_yaml::Value::String("x".into()),
+                    }],
+                },
+            ],
+        }),
+    }];
+    assert_invalid(&ir, "or operand must be bool");
+}
+
+#[test]
+fn policy_contains_bool_receiver_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.inputs.push(Input {
+        id: "flag".into(),
+        ty: "bool".into(),
+    });
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Input {
+                    name: "flag".into(),
+                },
+            }),
+            method: "contains".into(),
+            args: vec![Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("x".into()),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "is not supported");
+}
+
+#[test]
+fn policy_eq_bool_receiver_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.inputs.push(Input {
+        id: "flag".into(),
+        ty: "bool".into(),
+    });
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Input {
+                    name: "flag".into(),
+                },
+            }),
+            method: "eq".into(),
+            args: vec![Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("true".into()),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "incompatible types");
+}
+
+#[test]
+fn policy_contains_extra_args_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Bound {
+                    name: "command".into(),
+                },
+            }),
+            method: "contains".into(),
+            args: vec![
+                Expr::Literal {
+                    ty: "string".into(),
+                    value: serde_yaml::Value::String("x".into()),
+                },
+                Expr::Literal {
+                    ty: "string".into(),
+                    value: serde_yaml::Value::String("y".into()),
+                },
+            ],
+        }),
+    }];
+    assert_invalid(&ir, "requires exactly 1 argument");
+}
+
+#[test]
+fn policy_contains_number_receiver_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.inputs.push(Input {
+        id: "score".into(),
+        ty: "number".into(),
+    });
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Input {
+                    name: "score".into(),
+                },
+            }),
+            method: "contains".into(),
+            args: vec![Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("x".into()),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "is not supported on this receiver type");
 }

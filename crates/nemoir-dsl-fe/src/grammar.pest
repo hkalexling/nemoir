@@ -59,13 +59,34 @@ require_item = {
 }
 
 not_kw = { "not" }
+and_kw = { "and" }
+or_kw  = { "or" }
 dot = { "." }
 
-policy_expr = {
-    not_kw? ~
-    ident ~
-    (dot ~ ident ~ "(" ~ (ident ~ ("," ~ ident)*)? ~ ")")?
+policy_expr = { policy_or }
+
+policy_or   = { policy_and ~ (or_kw ~ policy_and)* }
+policy_and  = { policy_not ~ (and_kw ~ policy_not)* }
+policy_not  = { not_kw* ~ policy_primary }
+
+policy_primary = {
+    "(" ~ policy_expr ~ ")"
+    | call_or_in
+    | policy_ref
 }
+
+call_or_in = {
+    ident ~ (
+        dot ~ ident ~ "(" ~ policy_arg_list? ~ ")"
+        | "in" ~ policy_array
+    )
+}
+
+policy_ref = { !(dot | "in") ~ ident }
+
+policy_arg_list = { policy_value ~ ("," ~ policy_value)* }
+policy_array  = { "[" ~ policy_value ~ ("," ~ policy_value)* ~ "]" }
+policy_value  = { single_line_string | ident }
 
 stage = {
     "stage" ~ annotation? ~ ident ~ "{" ~

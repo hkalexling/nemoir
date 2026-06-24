@@ -37,7 +37,7 @@ pub struct Ident {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BaseType {
     String,
     Bool,
@@ -113,15 +113,32 @@ pub enum PolicyKind {
 
 #[derive(Debug, Clone)]
 pub enum PolicyExpr {
+    Or {
+        exprs: Vec<PolicyExpr>,
+    },
+    And {
+        exprs: Vec<PolicyExpr>,
+    },
     Not {
         expr: Box<PolicyExpr>,
     },
     MethodCall {
         receiver: Ident,
         method: Ident,
-        args: Vec<Ident>,
+        args: Vec<PolicyExprValue>,
+    },
+    In {
+        value: Ident,
+        options: Vec<PolicyExprValue>,
     },
     Ref(Ident),
+}
+
+/// A value in a policy expression: either a variable reference or a string literal.
+#[derive(Debug, Clone)]
+pub enum PolicyExprValue {
+    Ref(Ident),
+    String(Spanned<String>),
 }
 
 #[derive(Debug, Clone)]

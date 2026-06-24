@@ -1,0 +1,50 @@
+workflow TestAllowlist {
+  input {
+    cwd: path
+    candidate_path: path
+  }
+
+  policy {
+    // Item 3: only candidate.py is writable.
+    deny fs.write(path) if not path.eq(candidate_path)
+
+    // Item 3: explicit denylist (defensive, above the allowlist).
+    deny fs.write(path) if path.eq("harness/eval.py") or path.eq("harness/train.py")
+
+    // Containment still applies.
+    deny fs.write(path) if not cwd.contains(path)
+
+    // Item 2: exact allowed commands.
+    deny os.shell(command) if not (
+      command.eq("python harness/preflight.py")
+      or command.starts_with("python harness/run_trial.py ")
+      or command.starts_with("git commit -m ")
+    )
+
+    // Item 2: reject shell metacharacters.
+    deny os.shell(command) if command.contains("&&") or command.contains("; ")
+
+    // `in [...]` is sugar that lowers to OR of .eq(...).
+    deny fs.write(path) if not path in [candidate_path, "candidate_bak.py"]
+    // The `in [...]` policy above illustrates the sugar lowering (docs/dsl-and-ir.md §6).
+    // Note: the strict allowlist policy on line 13 denies everything except
+    // candidate_path so the `candidate_bak.py` option here does not extend
+    // the writable set — it is retained to demonstrate the `in` expression
+    // with multiple options.
+  }
+
+  stage@entry Start {
+    prompt: "start"
+    requires: fs.write, os.shell
+    output: {
+      x: string
+    }
+  }
+  stage@exit Fin {
+    prompt: "done"
+    input: Start.x
+    output: {
+      summary: string
+    }
+  }
+}

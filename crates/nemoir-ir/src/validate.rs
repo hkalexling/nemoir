@@ -290,6 +290,8 @@ fn expr_type<'a>(
     match expr {
         Expr::Not { .. } => Some("bool"),
         Expr::MethodCall { .. } => None,
+        Expr::And { .. } => Some("bool"),
+        Expr::Or { .. } => Some("bool"),
         Expr::Ref { r#ref } => resolve_ref_type(r#ref, writes_per_node, input_map),
         Expr::Literal { ty, .. } => Some(ty.as_str()),
     }
@@ -435,6 +437,30 @@ fn validate_expr_refs(
             );
         }
         Expr::Literal { .. } => {}
+        Expr::And { exprs } => {
+            for e in exprs {
+                validate_expr_refs(
+                    e,
+                    node_id,
+                    transition_idx,
+                    writes_per_node,
+                    input_map,
+                    errors,
+                );
+            }
+        }
+        Expr::Or { exprs } => {
+            for e in exprs {
+                validate_expr_refs(
+                    e,
+                    node_id,
+                    transition_idx,
+                    writes_per_node,
+                    input_map,
+                    errors,
+                );
+            }
+        }
     }
 }
 
@@ -863,8 +889,47 @@ fn validate_policy_refs(
             }
         }
 
+        // --- policy shape checks ---
+        if policy.kind == "deny" && policy.condition.is_none() {
+            errors.push(
+                format!("policies[{}].condition", i),
+                "deny policy must have a condition".into(),
+            );
+        }
+        if policy.kind == "before" && policy.condition.is_some() {
+            errors.push(
+                format!("policies[{}].condition", i),
+                "before policy must not have a condition".into(),
+            );
+        }
+
         if let Some(ref condition) = policy.condition {
             validate_policy_expr_refs(condition, i, "condition", input_map, &bound_names, errors);
+            validate_policy_expr_semantics(
+                condition,
+                i,
+                "condition",
+                &policy.trigger.capability,
+                &bound_names,
+                input_map,
+                errors,
+            );
+            // Top-level deny condition must be bool (non-DSL frontends
+            // may not enforce this; IR is the authoritative layer).
+            if policy.kind == "deny" {
+                let cond_ty = policy_expr_type(
+                    condition,
+                    &policy.trigger.capability,
+                    &bound_names,
+                    input_map,
+                );
+                if cond_ty.as_deref() != Some("bool") {
+                    errors.push(
+                        format!("policies[{}].condition", i),
+                        format!("deny condition must be bool, got {:?}", cond_ty),
+                    );
+                }
+            }
         }
     }
 }
@@ -935,5 +1000,298 @@ fn validate_policy_expr_refs(
             validate_policy_ref(r#ref, policy_idx, path, input_map, bound_names, errors);
         }
         Expr::Literal { .. } => {}
+        Expr::And { exprs } => {
+            for (k, e) in exprs.iter().enumerate() {
+                validate_policy_expr_refs(
+                    e,
+                    policy_idx,
+                    &format!("{}.and[{}]", path, k),
+                    input_map,
+                    bound_names,
+                    errors,
+                );
+            }
+        }
+        Expr::Or { exprs } => {
+            for (k, e) in exprs.iter().enumerate() {
+                validate_policy_expr_refs(
+                    e,
+                    policy_idx,
+                    &format!("{}.or[{}]", path, k),
+                    input_map,
+                    bound_names,
+                    errors,
+                );
+            }
+        }
+    }
+}
+
+/// Validate policy expression semantics: method names, arity, type compatibility,
+/// boolean operand requirements, and non-empty and/or.
+fn validate_policy_expr_semantics(
+    expr: &Expr,
+    policy_idx: usize,
+    path: &str,
+    trigger_capability: &str,
+    bound_names: &HashSet<&str>,
+    input_map: &HashMap<String, &str>,
+    errors: &mut ValidationErrors,
+) {
+    match expr {
+        Expr::Not { expr } => {
+            validate_policy_expr_semantics(
+                expr,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            let inner_ty = policy_expr_type(expr, trigger_capability, bound_names, input_map);
+            if inner_ty.as_deref() != Some("bool") {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    "`not` requires a bool expression".into(),
+                );
+            }
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            validate_policy_expr_semantics(
+                receiver,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            for (k, arg) in args.iter().enumerate() {
+                validate_policy_expr_semantics(
+                    arg,
+                    policy_idx,
+                    &format!("{}.args[{}]", path, k),
+                    trigger_capability,
+                    bound_names,
+                    input_map,
+                    errors,
+                );
+            }
+
+            let known_methods = ["contains", "eq", "starts_with"];
+            if !known_methods.contains(&method.as_str()) {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    format!(
+                        "unknown method '{}'; expected one of contains, eq, starts_with",
+                        method
+                    ),
+                );
+                return;
+            }
+
+            let receiver_ty =
+                policy_expr_type(receiver, trigger_capability, bound_names, input_map);
+
+            match method.as_str() {
+                "eq" => {
+                    if args.len() != 1 {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "eq() requires exactly 1 argument".into(),
+                        );
+                        return;
+                    }
+                    let arg_ty =
+                        policy_expr_type(&args[0], trigger_capability, bound_names, input_map);
+                    // Plan §5: Path.eq(Path/string) allowed; string.eq(string) allowed;
+                    // string.eq(Path) and all other combinations (bool, unknown, etc.) rejected.
+                    let compatible = match (receiver_ty.as_deref(), arg_ty.as_deref()) {
+                        (Some("path"), Some("path")) | (Some("path"), Some("string")) => true,
+                        (Some("string"), Some("string")) => true,
+                        (Some("string"), Some("path")) => false,
+                        _ => false, // Plan §5: no other type combinations are supported for eq
+                    };
+                    if !compatible {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            format!(
+                                "eq() compares incompatible types: {:?} vs {:?}",
+                                receiver_ty, arg_ty
+                            ),
+                        );
+                    }
+                }
+                "starts_with" => {
+                    if args.len() != 1 {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "starts_with() requires exactly 1 argument".into(),
+                        );
+                        return;
+                    }
+                    if receiver_ty.as_deref() != Some("string") {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "starts_with() requires a string receiver".into(),
+                        );
+                    }
+                    let arg_ty =
+                        policy_expr_type(&args[0], trigger_capability, bound_names, input_map);
+                    if arg_ty.as_deref() != Some("string") {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "starts_with() argument must be string".into(),
+                        );
+                    }
+                }
+                "contains" => {
+                    // Plan §5: contains accepts exactly 1 argument.
+                    if args.len() != 1 {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "contains() requires exactly 1 argument".into(),
+                        );
+                        return;
+                    }
+                    match receiver_ty.as_deref() {
+                        Some("path") => {
+                            let arg_ty = policy_expr_type(
+                                &args[0],
+                                trigger_capability,
+                                bound_names,
+                                input_map,
+                            );
+                            // plan: Path.contains(Path/string) — allow both
+                            if arg_ty.as_deref() != Some("path")
+                                && arg_ty.as_deref() != Some("string")
+                            {
+                                errors.push(
+                                    format!("policies[{}].{}", policy_idx, path),
+                                    "path.contains() argument must be path or string".into(),
+                                );
+                            }
+                        }
+                        Some("string") => {
+                            let arg_ty = policy_expr_type(
+                                &args[0],
+                                trigger_capability,
+                                bound_names,
+                                input_map,
+                            );
+                            if arg_ty.as_deref() != Some("string") {
+                                errors.push(
+                                    format!("policies[{}].{}", policy_idx, path),
+                                    "string.contains() argument must be string".into(),
+                                );
+                            }
+                        }
+                        // Plan §5: bool and unknown receiver types are unsupported.
+                        Some("bool") | None => {
+                            errors.push(
+                                format!("policies[{}].{}", policy_idx, path),
+                                "contains() is not supported on this receiver type".into(),
+                            );
+                        }
+                        Some(_) => {
+                            errors.push(
+                                format!("policies[{}].{}", policy_idx, path),
+                                "contains() is not supported on this receiver type".into(),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Expr::And { exprs } => {
+            if exprs.is_empty() {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    "and() requires at least 1 operand".into(),
+                );
+            }
+            for (k, e) in exprs.iter().enumerate() {
+                validate_policy_expr_semantics(
+                    e,
+                    policy_idx,
+                    &format!("{}.and[{}]", path, k),
+                    trigger_capability,
+                    bound_names,
+                    input_map,
+                    errors,
+                );
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = policy_expr_type(e, trigger_capability, bound_names, input_map);
+                if op_ty.as_deref() != Some("bool") {
+                    errors.push(
+                        format!("policies[{}].{}.and[{}]", policy_idx, path, k),
+                        format!("and operand must be bool, got {:?}", op_ty),
+                    );
+                }
+            }
+        }
+        Expr::Or { exprs } => {
+            if exprs.is_empty() {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    "or() requires at least 1 operand".into(),
+                );
+            }
+            for (k, e) in exprs.iter().enumerate() {
+                validate_policy_expr_semantics(
+                    e,
+                    policy_idx,
+                    &format!("{}.or[{}]", path, k),
+                    trigger_capability,
+                    bound_names,
+                    input_map,
+                    errors,
+                );
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = policy_expr_type(e, trigger_capability, bound_names, input_map);
+                if op_ty.as_deref() != Some("bool") {
+                    errors.push(
+                        format!("policies[{}].{}.or[{}]", policy_idx, path, k),
+                        format!("or operand must be bool, got {:?}", op_ty),
+                    );
+                }
+            }
+        }
+        Expr::Ref { .. } | Expr::Literal { .. } => {}
+    }
+}
+
+/// Infer the type of a policy expression from trigger bindings and input types.
+fn policy_expr_type(
+    expr: &Expr,
+    trigger_capability: &str,
+    bound_names: &HashSet<&str>,
+    input_map: &HashMap<String, &str>,
+) -> Option<String> {
+    match expr {
+        Expr::Not { .. } | Expr::And { .. } | Expr::Or { .. } => Some("bool".to_string()),
+        Expr::MethodCall { .. } => Some("bool".to_string()),
+        Expr::Ref { r#ref } => match r#ref {
+            Ref::Input { name } => input_map.get(name).map(|s| s.to_string()),
+            Ref::Bound { name } => {
+                if bound_names.contains(name.as_str()) {
+                    crate::capabilities::bound_var_type(trigger_capability, name).map(|t| match t {
+                        crate::capabilities::CapabilityParamType::String => "string".to_string(),
+                        crate::capabilities::CapabilityParamType::Path => "path".to_string(),
+                        crate::capabilities::CapabilityParamType::Bool => "bool".to_string(),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        Expr::Literal { ty, .. } => Some(ty.clone()),
     }
 }
