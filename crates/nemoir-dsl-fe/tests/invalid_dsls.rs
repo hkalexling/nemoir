@@ -73,6 +73,11 @@ test_invalid!(optional_bool_branch, "optional_bool_branch.nemo");
 test_invalid!(multiple_bool_branches, "multiple_bool_branches.nemo");
 test_invalid!(unknown_capability_stage, "unknown_capability_stage.nemo");
 test_invalid!(unknown_capability_policy, "unknown_capability_policy.nemo");
+test_invalid!(exec_unknown_capability, "exec_unknown_capability.nemo");
+test_invalid!(exec_missing_param, "exec_missing_param.nemo");
+test_invalid!(exec_unknown_param, "exec_unknown_param.nemo");
+test_invalid!(exec_unknown_input_ref, "exec_unknown_input_ref.nemo");
+test_invalid!(exec_unknown_output_ref, "exec_unknown_output_ref.nemo");
 test_invalid!(
     policy_unknown_trigger_param,
     "policy_unknown_trigger_param.nemo"

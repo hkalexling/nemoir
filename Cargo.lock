@@ -332,6 +332,7 @@ dependencies = [
 name = "nemoir-backend-visualizer"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "nemoir-ir",
  "serde",
  "serde_json",

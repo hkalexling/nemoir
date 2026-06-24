@@ -97,7 +97,7 @@ stage = {
 annotation = @{ "@" ~ ident }
 
 stage_body_item = {
-    prompt_decl | stage_input | output_block | requires_block
+    prompt_decl | stage_input | output_block | requires_block | exec_decl
 }
 
 prompt_decl = {
@@ -129,6 +129,14 @@ bool_branches = {
 requires_block = {
     "requires" ~ ":" ~ dotted_ident ~ ("," ~ dotted_ident)*
 }
+
+exec_decl = {
+    "exec" ~ ":" ~ dotted_ident ~ "(" ~ exec_arg_list? ~ ")"
+}
+
+exec_arg_list = { exec_arg ~ ("," ~ exec_arg)* }
+exec_arg = { ident ~ ":" ~ exec_value }
+exec_value = { single_line_string | ident ~ ("." ~ ident)? }
 
 string = { multiline_string | single_line_string }
 

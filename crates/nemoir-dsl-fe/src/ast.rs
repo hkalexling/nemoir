@@ -191,6 +191,28 @@ pub enum StageBodyItem {
     Input(Vec<StageInputRef>),
     Output(Vec<OutputField>),
     Requires(Vec<Ident>),
+    Exec(ExecDecl),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExecValue {
+    Ref(StageInputRef),
+    InputRef(Ident),
+    String(Spanned<String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecArg {
+    pub name: Ident,
+    pub value: ExecValue,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecDecl {
+    pub capability: Ident,
+    pub args: Vec<ExecArg>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

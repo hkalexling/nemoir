@@ -54,6 +54,12 @@ pub fn lower(
                 cap_first_seen.push(c);
             }
         }
+        if let Some(ref exec) = stage.exec {
+            let c = exec.capability.text.clone();
+            if cap_set.insert(c.clone()) {
+                cap_first_seen.push(c);
+            }
+        }
     }
     for policy in &rw.policies {
         let c = policy.trigger.capability.text.clone();
@@ -337,6 +343,32 @@ fn lower_node(
         });
     }
 
+    // Auto-add reads from exec arg refs (Stage.field)
+    let mut stage_field_reads: HashSet<String> = HashSet::new();
+    for r in &reads {
+        if let Ref::NodeOutput { node, field } = &r.ref_ {
+            stage_field_reads.insert(format!("{}:{}", node, field));
+        }
+    }
+    if let Some(ref exec) = stage.exec {
+        for arg in &exec.args {
+            if let ExecValue::Ref(r) = &arg.value {
+                let key = format!("{}:{}", r.stage.text, r.field.text);
+                if !stage_field_reads.contains(&key) {
+                    stage_field_reads.insert(key);
+                    reads.push(Read {
+                        ref_: Ref::NodeOutput {
+                            node: r.stage.text.clone(),
+                            field: r.field.text.clone(),
+                        },
+                        optional: false,
+                        origin: "exec_arg".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
     let writes: Vec<Write> = stage
         .outputs
         .iter()
@@ -347,13 +379,54 @@ fn lower_node(
         })
         .collect();
 
-    let requires: Vec<StageCapability> = stage
+    let mut requires: Vec<StageCapability> = stage
         .requires
         .iter()
         .map(|c| StageCapability {
             capability: c.text.clone(),
         })
         .collect();
+
+    // Auto-add exec capability to requires
+    if let Some(ref exec) = stage.exec {
+        let exec_cap = exec.capability.text.clone();
+        if !requires.iter().any(|c| c.capability == exec_cap) {
+            requires.push(StageCapability {
+                capability: exec_cap,
+            });
+        }
+    }
+
+    // Build execution
+    let execution = if let Some(ref exec) = stage.exec {
+        let mut args: IndexMap<String, Expr> = IndexMap::new();
+        for arg in &exec.args {
+            let value = match &arg.value {
+                ExecValue::Ref(r) => Expr::Ref {
+                    r#ref: Ref::NodeOutput {
+                        node: r.stage.text.clone(),
+                        field: r.field.text.clone(),
+                    },
+                },
+                ExecValue::InputRef(id) => Expr::Ref {
+                    r#ref: Ref::Input {
+                        name: id.text.clone(),
+                    },
+                },
+                ExecValue::String(s) => Expr::Literal {
+                    ty: "string".to_string(),
+                    value: serde_yaml::Value::String(s.value.clone()),
+                },
+            };
+            args.insert(arg.name.text.clone(), value);
+        }
+        StageExecution::Tool {
+            capability: exec.capability.text.clone(),
+            args,
+        }
+    } else {
+        StageExecution::Model
+    };
 
     Node {
         id: stage.name.text.clone(),
@@ -363,5 +436,6 @@ fn lower_node(
         writes,
         requires,
         transitions: transitions.to_vec(),
+        execution,
     }
 }

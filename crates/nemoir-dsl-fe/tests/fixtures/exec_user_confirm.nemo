@@ -1,0 +1,16 @@
+workflow UserConfirmExec {
+  stage @entry Confirm {
+    exec: user.confirm(message: "Proceed?")
+    output: {
+      ok: bool { true => Done false => Done }
+    }
+  }
+
+  stage @exit Done {
+    input: Confirm.ok
+    prompt: "Confirmation result: @Confirm.ok"
+    output: {
+      summary: string
+    }
+  }
+}

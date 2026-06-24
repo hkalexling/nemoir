@@ -35,6 +35,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                     reason: "fallthrough".into(),
                     guard: Guard::Always,
                 }],
+                execution: StageExecution::Model,
             },
             Node {
                 id: "Done".into(),
@@ -44,6 +45,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                 writes: vec![],
                 requires: vec![],
                 transitions: vec![],
+                execution: StageExecution::Model,
             },
         ],
     }
@@ -191,4 +193,61 @@ fn html_saves_positions_on_dragfree() {
         html.contains("dragfree"),
         "should save positions on dragfree"
     );
+}
+
+#[test]
+fn deterministic_stage_has_execution_in_graph_data() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.nodes[0].requires.push(StageCapability {
+        capability: "os.shell".into(),
+    });
+    let mut args = indexmap::IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo ok".into()),
+        },
+    );
+    ir.nodes[0].execution = StageExecution::Tool {
+        capability: "os.shell".into(),
+        args,
+    };
+    let graph = nemoir_backend_visualizer::graph::build_graph_data(&ir).unwrap();
+    let node = &graph["nodes"][0]["data"];
+    assert_eq!(node["execution"]["kind"], "tool");
+    assert_eq!(node["execution"]["capability"], "os.shell");
+    assert_eq!(node["isTool"], true);
+}
+
+#[test]
+fn deterministic_stage_renders_execution_section_in_html() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    ir.nodes[0].requires.push(StageCapability {
+        capability: "os.shell".into(),
+    });
+    let mut args = indexmap::IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo ok".into()),
+        },
+    );
+    ir.nodes[0].execution = StageExecution::Tool {
+        capability: "os.shell".into(),
+        args,
+    };
+    let html = render_html(&ir, &VisualizerOptions::default()).unwrap();
+    // The inspector JS renders exec: for tool stages.
+    assert!(html.contains("exec:"));
+    // The graph data carries isTool=true for tool nodes.
+    assert!(html.contains("\"isTool\":true"));
+
+    // Model-stage HTML should have isTool:false (or absent) for all nodes.
+    let ir_model = valid_minimal_ir();
+    let html_model = render_html(&ir_model, &VisualizerOptions::default()).unwrap();
+    assert!(html_model.contains("\"isTool\":false"));
 }

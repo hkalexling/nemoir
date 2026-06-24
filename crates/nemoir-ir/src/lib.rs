@@ -107,6 +107,26 @@ pub enum ArgValue {
     Ref { r#ref: Ref },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(tag = "kind")]
+pub enum StageExecution {
+    #[serde(rename = "model")]
+    #[default]
+    Model,
+
+    #[serde(rename = "tool")]
+    Tool {
+        capability: String,
+        args: IndexMap<String, Expr>,
+    },
+}
+
+impl StageExecution {
+    pub fn is_model(&self) -> bool {
+        matches!(self, StageExecution::Model)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Node {
     pub id: String,
@@ -117,6 +137,8 @@ pub struct Node {
     pub writes: Vec<Write>,
     pub requires: Vec<StageCapability>,
     pub transitions: Vec<Transition>,
+    #[serde(default, skip_serializing_if = "StageExecution::is_model")]
+    pub execution: StageExecution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

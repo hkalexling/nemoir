@@ -28,6 +28,7 @@ pub fn emit_manifest_module(ir: &WorkflowIr) -> Result<String, PythonBackendErro
     out.push_str("    ReadSpec,\n");
     out.push_str("    RefSpec,\n");
     out.push_str("    RequiredCapabilitySpec,\n");
+    out.push_str("    StageExecutionSpec,\n");
     out.push_str("    StageSpec,\n");
     out.push_str("    TransitionSpec,\n");
     out.push_str("    TriggerSpec,\n");
@@ -271,6 +272,13 @@ pub fn emit_agent_module(
             "        self._model = model\n",
             "        self._tools = tools\n",
             "        self._defaults = defaults\n",
+            "        # Eagerly validate deterministic stages — fail fast\n",
+            "        # before any run starts (plan §1.7).\n",
+            "        WorkflowRuntime(\n",
+            "            manifest=WORKFLOW_MANIFEST,\n",
+            "            tools=tools,\n",
+            "            stage_executor=ModelStageExecutor(model=model, tools=tools),\n",
+            "        )\n",
             "\n",
             "    async def run(\n",
             "        self,\n",
@@ -713,8 +721,42 @@ pub fn emit_stage(node: &nemoir_ir::Node) -> Result<String, PythonBackendError> 
         out.push(')');
     }
 
+    // execution
+    if !node.execution.is_model() {
+        out.push_str(", execution=");
+        out.push_str(&emit_stage_execution(&node.execution)?);
+    }
+
     out.push(')');
     Ok(out)
+}
+
+/// StageExecutionSpec(kind="tool", capability=..., args={...})
+pub fn emit_stage_execution(exec: &nemoir_ir::StageExecution) -> Result<String, PythonBackendError> {
+    match exec {
+        nemoir_ir::StageExecution::Model => Ok("StageExecutionSpec()".into()),
+        nemoir_ir::StageExecution::Tool { capability, args } => {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "StageExecutionSpec(kind=\"tool\", capability={}",
+                python_string_literal(capability)
+            ));
+            out.push_str(", args={");
+            for (i, (name, expr)) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!(
+                    "{}: {}",
+                    python_string_literal(name),
+                    emit_expr(expr)?
+                ));
+            }
+            out.push('}');
+            out.push(')');
+            Ok(out)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1207,6 +1249,7 @@ mod tests {
                 reason: "next_stage_required_input_available".into(),
                 guard: Guard::Always,
             }],
+            execution: StageExecution::Model,
         };
         let s = super::emit_stage(&node).unwrap();
         assert!(s.starts_with("StageSpec(id=\"Triage\""));
@@ -1233,6 +1276,7 @@ mod tests {
             writes: vec![],
             requires: vec![],
             transitions: vec![],
+            execution: StageExecution::Model,
         };
         let s = emit_stage(&node).unwrap();
         assert!(!s.contains("annotations"));
@@ -1274,5 +1318,52 @@ mod tests {
             "single-element exprs must have trailing comma for 1-tuple: {}",
             s
         );
+    }
+
+    #[test]
+    fn deterministic_tool_stage_emits_execution() {
+        let mut args = indexmap::IndexMap::new();
+        args.insert(
+            "command".to_string(),
+            Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("echo hi".into()),
+            },
+        );
+        let node = Node {
+            id: "Run".into(),
+            annotations: vec![],
+            prompt: "".into(),
+            reads: vec![],
+            writes: vec![],
+            requires: vec![StageCapability {
+                capability: "os.shell".into(),
+            }],
+            transitions: vec![],
+            execution: StageExecution::Tool {
+                capability: "os.shell".into(),
+                args,
+            },
+        };
+        let s = emit_stage(&node).unwrap();
+        assert!(s.contains("execution=StageExecutionSpec(kind=\"tool\""));
+        assert!(s.contains("capability=\"os.shell\""));
+        assert!(s.contains("args={\"command\": ExprSpec(kind=\"literal\", type=\"string\", value=\"echo hi\")}"));
+    }
+
+    #[test]
+    fn model_stage_omits_execution() {
+        let node = Node {
+            id: "X".into(),
+            annotations: vec![],
+            prompt: "p".into(),
+            reads: vec![],
+            writes: vec![],
+            requires: vec![],
+            transitions: vec![],
+            execution: StageExecution::Model,
+        };
+        let s = emit_stage(&node).unwrap();
+        assert!(!s.contains("execution="));
     }
 }

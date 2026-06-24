@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use nemoir_ir::*;
 
 #[test]
@@ -111,6 +112,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                     reason: "fallthrough".into(),
                     guard: Guard::Always,
                 }],
+                execution: StageExecution::Model,
             },
             Node {
                 id: "B".into(),
@@ -124,6 +126,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                 }],
                 requires: vec![],
                 transitions: vec![],
+                execution: StageExecution::Model,
             },
         ],
     }
@@ -192,6 +195,7 @@ fn duplicate_node_ids_rejected() {
         writes: vec![],
         requires: vec![],
         transitions: vec![],
+        execution: StageExecution::Model,
     });
     assert_invalid(&ir, "duplicate node id");
 }
@@ -229,6 +233,7 @@ fn unreachable_node_rejected() {
         writes: vec![],
         requires: vec![],
         transitions: vec![],
+        execution: StageExecution::Model,
     });
     assert_invalid(&ir, "unreachable from entry");
 }
@@ -579,6 +584,7 @@ fn future_producer_read_rejected() {
         }],
         requires: vec![],
         transitions: vec![],
+        execution: StageExecution::Model,
     });
     ir.nodes[1].transitions = vec![Transition {
         to: "C".into(),
@@ -643,6 +649,7 @@ fn valid_loop_backref_read_passes() {
         writes: vec![],
         requires: vec![],
         transitions: vec![],
+        execution: StageExecution::Model,
     });
     ir.workflow.exits = vec!["C".into()];
     ir.nodes[1].transitions[0] = Transition {
@@ -1440,4 +1447,147 @@ fn policy_contains_number_receiver_rejected() {
         }),
     }];
     assert_invalid(&ir, "is not supported on this receiver type");
+}
+
+// ---------------------------------------------------------------------------
+// StageExecution validation tests
+// ---------------------------------------------------------------------------
+
+fn make_tool_stage_ir(capability: &str, args: IndexMap<String, Expr>) -> WorkflowIr {
+    let mut ir = valid_minimal_ir();
+    if !ir.capabilities.iter().any(|c| c == capability) {
+        ir.capabilities.push(capability.to_string());
+    }
+    ir.nodes[0].execution = StageExecution::Tool {
+        capability: capability.to_string(),
+        args,
+    };
+    if !ir.nodes[0].requires.iter().any(|c| c.capability == capability) {
+        ir.nodes[0].requires.push(StageCapability {
+            capability: capability.to_string(),
+        });
+    }
+    ir
+}
+
+#[test]
+fn exec_unknown_capability_rejected() {
+    let ir = make_tool_stage_ir("unknown.cap", IndexMap::new());
+    assert_invalid(&ir, "unknown exec capability");
+}
+
+#[test]
+fn exec_capability_not_in_top_level_rejected() {
+    let mut ir = valid_minimal_ir();
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo hi".into()),
+        },
+    );
+    ir.nodes[0].execution = StageExecution::Tool {
+        capability: "os.shell".into(),
+        args,
+    };
+    ir.nodes[0].requires.push(StageCapability {
+        capability: "os.shell".into(),
+    });
+    // capability_set does not contain os.shell
+    assert_invalid(&ir, "not declared in top-level capabilities");
+}
+
+#[test]
+fn exec_capability_not_in_requires_rejected() {
+    let mut ir = valid_minimal_ir();
+    ir.capabilities.push("os.shell".into());
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo hi".into()),
+        },
+    );
+    ir.nodes[0].execution = StageExecution::Tool {
+        capability: "os.shell".into(),
+        args,
+    };
+    // node requires only has fs.read, not os.shell
+    assert_invalid(&ir, "must be in node's requires");
+}
+
+#[test]
+fn exec_missing_required_param_rejected() {
+    let args = IndexMap::new();
+    // os.shell requires 'command' — we don't add it
+    let ir = make_tool_stage_ir("os.shell", args);
+    assert_invalid(&ir, "missing required exec arg 'command'");
+}
+
+#[test]
+fn exec_unknown_param_rejected() {
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo hi".into()),
+        },
+    );
+    args.insert(
+        "extra".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("x".into()),
+        },
+    );
+    let ir = make_tool_stage_ir("os.shell", args);
+    assert_invalid(&ir, "unknown exec arg 'extra'");
+}
+
+#[test]
+fn exec_bound_ref_rejected() {
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Ref {
+            r#ref: Ref::Bound {
+                name: "cmd".into(),
+            },
+        },
+    );
+    let ir = make_tool_stage_ir("os.shell", args);
+    assert_invalid(&ir, "Ref::Bound");
+}
+
+#[test]
+fn exec_non_ref_literal_expr_rejected() {
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Not {
+            expr: Box::new(Expr::Literal {
+                ty: "bool".into(),
+                value: serde_yaml::Value::Bool(true),
+            }),
+        },
+    );
+    let ir = make_tool_stage_ir("os.shell", args);
+    assert_invalid(&ir, "only Ref and Literal expressions");
+}
+
+#[test]
+fn exec_valid_tool_stage_accepted() {
+    let mut args = IndexMap::new();
+    args.insert(
+        "command".into(),
+        Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("echo hi".into()),
+        },
+    );
+    let ir = make_tool_stage_ir("os.shell", args);
+    assert_valid(&ir);
 }

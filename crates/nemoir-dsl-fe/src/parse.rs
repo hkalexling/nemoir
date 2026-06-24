@@ -32,13 +32,16 @@ pub fn parse_source(source: &str, filename: &str) -> Result<WorkflowAst, Diagnos
                         Rule::policy_expr => "a policy condition",
                         Rule::policy_value => "an identifier or string literal",
                         Rule::stage => "stage declaration",
-                        Rule::stage_body_item => "prompt:, input:, output:, or requires:",
+                        Rule::stage_body_item => "prompt:, input:, output:, requires:, or exec:",
                         Rule::prompt_decl => "prompt:",
                         Rule::stage_input => "input:",
                         Rule::input_ref => "stage field reference like Stage.field",
                         Rule::output_block => "output: { ... }",
                         Rule::output_field => "an output field (name: type)",
                         Rule::requires_block => "requires:",
+                        Rule::exec_decl => "exec: capability(args)",
+                        Rule::exec_arg => "exec arg name: value",
+                        Rule::exec_value => "a string literal or Stage.field reference",
                         Rule::bool_branches => "{ true => X false => Y }",
                         Rule::before_policy => "before policy",
                         Rule::deny_policy => "deny policy",
@@ -418,6 +421,9 @@ fn parse_stage(pair: pest::iterators::Pair<Rule>) -> Result<StageDecl, Diagnosti
                 let requires = parse_requires_block(body_item);
                 items.push(StageBodyItem::Requires(requires));
             }
+            Rule::exec_decl => {
+                items.push(parse_exec_decl(body_item)?);
+            }
             _ => {}
         }
     }
@@ -496,6 +502,75 @@ fn parse_bool_branches(pair: pest::iterators::Pair<Rule>) -> BoolBranches {
 
 fn parse_requires_block(pair: pest::iterators::Pair<Rule>) -> Vec<Ident> {
     pair.into_inner().map(parse_ident).collect()
+}
+
+fn parse_exec_decl(pair: pest::iterators::Pair<Rule>) -> Result<StageBodyItem, Diagnostic> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+    let capability = parse_ident(inner.next().expect("exec capability"));
+    let mut args = Vec::new();
+    // The children are: exec_arg_list (containing exec_arg items)
+    for child in inner {
+        if child.as_rule() == Rule::exec_arg_list {
+            for arg_pair in child.into_inner() {
+                args.push(parse_exec_arg(arg_pair));
+            }
+        }
+    }
+    Ok(StageBodyItem::Exec(ExecDecl {
+        capability,
+        args,
+        span,
+    }))
+}
+
+fn parse_exec_arg(pair: pest::iterators::Pair<Rule>) -> ExecArg {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+    let name = parse_ident(inner.next().expect("exec arg name"));
+    let value = parse_exec_value(inner.next().expect("exec arg value"));
+    ExecArg { name, value, span }
+}
+
+fn parse_exec_value(pair: pest::iterators::Pair<Rule>) -> ExecValue {
+    // exec_value = { single_line_string | ident ~ ("." ~ ident)? }
+    // Children are flattened: single_line_string OR ident [ident]
+    // (the "." is a silent literal and produces no pair)
+    let mut inner = pair.into_inner();
+    let first = inner.next().expect("exec value first token");
+    match first.as_rule() {
+        Rule::single_line_string => {
+            let raw = first.as_str();
+            let processed = process_policy_string_literal(raw);
+            let span = span_from_pair(&first);
+            ExecValue::String(Spanned::new(processed, span))
+        }
+        Rule::ident => {
+            let first_ident = parse_ident(first);
+            // Silent "." was consumed; check for optional second ident (field name)
+            match inner.next() {
+                Some(second) if second.as_rule() == Rule::ident => {
+                    let field = parse_ident(second);
+                    let span = Span::new(first_ident.span.start, field.span.end);
+                    ExecValue::Ref(StageInputRef {
+                        stage: first_ident,
+                        field,
+                        optional: false,
+                        span,
+                    })
+                }
+                Some(_) | None => ExecValue::InputRef(first_ident),
+            }
+        }
+        _ => {
+            // Should be unreachable — grammar guarantees single_line_string or ident
+            let span = span_from_pair(&first);
+            ExecValue::InputRef(Ident {
+                text: String::new(),
+                span,
+            })
+        }
+    }
 }
 
 pub fn process_string(raw: &str) -> String {

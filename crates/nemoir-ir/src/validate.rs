@@ -145,6 +145,10 @@ pub fn validate(ir: &WorkflowIr) -> Result<(), ValidationErrors> {
         }
     }
 
+    for node in &ir.nodes {
+        validate_stage_execution(node, &capability_set, &input_map, &writes_per_node, &mut errors);
+    }
+
     validate_policy_refs(&ir.policies, &input_map, &capability_set, &mut errors);
 
     if errors.errors.is_empty() {
@@ -725,6 +729,164 @@ fn validate_optional_guard_refs(
                 }
             }
             _ => {}
+        }
+    }
+}
+
+fn validate_stage_execution(
+    node: &Node,
+    capability_set: &HashSet<String>,
+    input_map: &HashMap<String, &str>,
+    writes_per_node: &HashMap<String, HashMap<String, &Write>>,
+    errors: &mut ValidationErrors,
+) {
+    let StageExecution::Tool { capability, args } = &node.execution else {
+        return;
+    };
+
+    if !crate::capabilities::is_known_capability(capability) {
+        errors.push(
+            format!("nodes.{}.execution", node.id),
+            format!("unknown exec capability '{}'", capability),
+        );
+        return;
+    }
+
+    if !capability_set.contains(capability) {
+        errors.push(
+            format!("nodes.{}.execution", node.id),
+            format!(
+                "exec capability '{}' not declared in top-level capabilities",
+                capability
+            ),
+        );
+    }
+
+    if !node.requires.iter().any(|c| c.capability == *capability) {
+        errors.push(
+            format!("nodes.{}.execution", node.id),
+            format!(
+                "exec capability '{}' must be in node's requires",
+                capability
+            ),
+        );
+    }
+
+    let spec = crate::capabilities::get_capability(capability).unwrap();
+    let mut seen_params: HashSet<&str> = HashSet::new();
+    let reads_set: HashSet<String> = node
+        .reads
+        .iter()
+        .filter_map(|r| match &r.ref_ {
+            Ref::NodeOutput { node, field } => Some(format!("{}:{}", node, field)),
+            _ => None,
+        })
+        .collect();
+
+    for (arg_name, arg_expr) in args {
+        seen_params.insert(arg_name.as_str());
+
+        if !spec.has_required_param(arg_name) {
+            errors.push(
+                format!("nodes.{}.execution.args.{}", node.id, arg_name),
+                format!(
+                    "unknown exec arg '{}' for capability '{}'",
+                    arg_name, capability
+                ),
+            );
+        }
+
+        validate_exec_arg_expr(
+            arg_expr,
+            &node.id,
+            arg_name,
+            input_map,
+            writes_per_node,
+            &reads_set,
+            errors,
+        );
+    }
+
+    for param in spec.required_params {
+        if !seen_params.contains(param.name) {
+            errors.push(
+                format!("nodes.{}.execution", node.id),
+                format!(
+                    "missing required exec arg '{}' for capability '{}'",
+                    param.name, capability
+                ),
+            );
+        }
+    }
+}
+
+fn validate_exec_arg_expr(
+    expr: &Expr,
+    node_id: &str,
+    arg_name: &str,
+    input_map: &HashMap<String, &str>,
+    writes_per_node: &HashMap<String, HashMap<String, &Write>>,
+    reads_set: &HashSet<String>,
+    errors: &mut ValidationErrors,
+) {
+    let path = format!("nodes.{}.execution.args.{}", node_id, arg_name);
+    match expr {
+        Expr::Ref { r#ref } => match r#ref {
+            Ref::Input { name } => {
+                if !input_map.contains_key(name) {
+                    errors.push(
+                        path,
+                        format!("exec arg refs unknown workflow input '{}'", name),
+                    );
+                }
+            }
+            Ref::NodeOutput { node, field } => {
+                if let Some(writes) = writes_per_node.get(node) {
+                    if !writes.contains_key(field) {
+                        errors.push(
+                            path.clone(),
+                            format!(
+                                "exec arg refs unknown output '{}.{}'",
+                                node, field
+                            ),
+                        );
+                    }
+                } else {
+                    errors.push(
+                        path.clone(),
+                        format!("exec arg refs unknown node '{}'", node),
+                    );
+                }
+                let key = format!("{}:{}", node, field);
+                if !reads_set.contains(&key) {
+                    errors.push(
+                        path,
+                        format!(
+                            "exec arg refs '{}.{}' but not in node's reads",
+                            node, field
+                        ),
+                    );
+                }
+            }
+            Ref::Bound { name } => {
+                errors.push(
+                    path,
+                    format!(
+                        "exec arg uses Ref::Bound('{}') which is policy-local only",
+                        name
+                    ),
+                );
+            }
+        },
+        Expr::Literal { .. } => {}
+        Expr::Not { .. }
+        | Expr::MethodCall { .. }
+        | Expr::And { .. }
+        | Expr::Or { .. } => {
+            errors.push(
+                path,
+                "only Ref and Literal expressions are allowed in exec args (MVP)".into(),
+            );
         }
     }
 }

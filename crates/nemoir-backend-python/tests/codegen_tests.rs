@@ -37,6 +37,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                     reason: "fallthrough".into(),
                     guard: Guard::Always,
                 }],
+                execution: StageExecution::Model,
             },
             Node {
                 id: "Done".into(),
@@ -46,6 +47,7 @@ fn valid_minimal_ir() -> WorkflowIr {
                 writes: vec![],
                 requires: vec![],
                 transitions: vec![],
+                execution: StageExecution::Model,
             },
         ],
     }
@@ -104,7 +106,7 @@ fn generate_coding_agent_package_surface() {
     // pyproject surface
     let pyproject = file_content(&pkg, "pyproject.toml");
     assert!(pyproject.contains("name = \"coding-agent\""));
-    assert!(pyproject.contains("\"nemoir-runtime>=0.7.0\""));
+    assert!(pyproject.contains("\"nemoir-runtime>=0.8.0\""));
     assert!(pyproject.contains("packages = [\"coding_agent\"]"));
     assert!(pyproject.contains("version = \"0.1.0\""));
 
@@ -317,6 +319,7 @@ fn multi_exit_ir() -> WorkflowIr {
                         guard: Guard::Always,
                     },
                 ],
+                execution: StageExecution::Model,
             },
             Node {
                 id: "Done1".into(),
@@ -330,6 +333,7 @@ fn multi_exit_ir() -> WorkflowIr {
                 }],
                 requires: vec![],
                 transitions: vec![],
+                execution: StageExecution::Model,
             },
             Node {
                 id: "Done2".into(),
@@ -343,6 +347,7 @@ fn multi_exit_ir() -> WorkflowIr {
                 }],
                 requires: vec![],
                 transitions: vec![],
+                execution: StageExecution::Model,
             },
         ],
     }
@@ -570,4 +575,101 @@ fn generated_files_are_syntactically_valid_python() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic stage: generate_package integration (Low #2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generate_package_tool_stage_emits_stageexecutionspec() {
+    let ir = WorkflowIr {
+        ir_version: "0.1".into(),
+        kind: "workflow_ir".into(),
+        source: Source {
+            frontend: "test".into(),
+            file: "test.nemo".into(),
+        },
+        workflow: Workflow {
+            id: "ToolStage".into(),
+            entry: "Run".into(),
+            exits: vec!["Fin".into()],
+            transition_semantics: TransitionSemantics {
+                selection: "first_match_by_priority".into(),
+                no_match: "error_unless_exit".into(),
+            },
+        },
+        inputs: vec![],
+        capabilities: vec!["os.shell".into()],
+        policies: vec![],
+        nodes: vec![
+            Node {
+                id: "Run".into(),
+                annotations: vec!["entry".into()],
+                prompt: "".into(),
+                reads: vec![],
+                writes: vec![],
+                requires: vec![StageCapability {
+                    capability: "os.shell".into(),
+                }],
+                transitions: vec![Transition {
+                    to: "Fin".into(),
+                    priority: 0,
+                    reason: "fallthrough".into(),
+                    guard: Guard::Always,
+                }],
+                execution: StageExecution::Tool {
+                    capability: "os.shell".into(),
+                    args: {
+                        let mut m = indexmap::IndexMap::new();
+                        m.insert(
+                            "command".into(),
+                            Expr::Literal {
+                                ty: "string".into(),
+                                value: serde_yaml::Value::String("echo ok".into()),
+                            },
+                        );
+                        m
+                    },
+                },
+            },
+            Node {
+                id: "Fin".into(),
+                annotations: vec!["exit".into()],
+                prompt: "done".into(),
+                reads: vec![],
+                writes: vec![Write {
+                    name: "summary".into(),
+                    ty: "string".into(),
+                    optional: false,
+                }],
+                requires: vec![],
+                transitions: vec![],
+                execution: StageExecution::Model,
+            },
+        ],
+    };
+
+    let pkg = generate_package(&ir, &PythonBackendOptions::default()).unwrap();
+    let manifest = file_content(&pkg, "tool_stage/_manifest.py");
+
+    // Tool stage emits execution=
+    assert!(
+        manifest.contains("execution=StageExecutionSpec(kind=\"tool\""),
+        "manifest should emit execution= for tool stage"
+    );
+    assert!(
+        manifest.contains("capability=\"os.shell\""),
+        "manifest should include capability"
+    );
+
+    // Model stage omits execution= (no execution= before its StageSpec)
+    let fin_index = manifest.find("StageSpec(id=\"Fin\"").unwrap();
+    let fin_chunk = &manifest[fin_index..];
+    let next_stage_start = fin_chunk.find("StageSpec(id=").unwrap_or(fin_chunk.len());
+    let fin_section = &fin_chunk[..next_stage_start];
+    assert!(
+        !fin_section.contains("execution="),
+        "model stage should not emit execution="
+    );
 }

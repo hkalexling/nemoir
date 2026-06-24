@@ -23,12 +23,22 @@ struct CyNodeData {
     is_entry: bool,
     #[serde(rename = "isExit")]
     is_exit: bool,
+    #[serde(rename = "isTool")]
+    is_tool: bool,
     annotations: Vec<String>,
     prompt: String,
     reads: Vec<Read>,
     writes: Vec<Write>,
     requires: Vec<StageCapability>,
     transitions: Vec<TransitionSummary>,
+    execution: ExecutionSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct ExecutionSummary {
+    kind: String,
+    capability: Option<String>,
+    summary: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,12 +99,14 @@ pub fn build_graph_data(ir: &WorkflowIr) -> Result<serde_json::Value, Visualizer
                 kind: "state".to_string(),
                 is_entry,
                 is_exit,
+                is_tool: !node.execution.is_model(),
                 annotations: node.annotations.clone(),
                 prompt: node.prompt.clone(),
                 reads: node.reads.clone(),
                 writes: node.writes.clone(),
                 requires: node.requires.clone(),
                 transitions: tsummaries,
+                execution: execution_summary(&node.execution),
             },
         });
     }
@@ -142,6 +154,27 @@ fn guard_summary(g: &Guard) -> String {
             let l = expr_summary(left);
             let r = expr_summary(right);
             format!("{} == {}", l, r)
+        }
+    }
+}
+
+fn execution_summary(e: &StageExecution) -> ExecutionSummary {
+    match e {
+        StageExecution::Model => ExecutionSummary {
+            kind: "model".to_string(),
+            capability: None,
+            summary: None,
+        },
+        StageExecution::Tool { capability, args } => {
+            let arg_strs: Vec<String> = args
+                .iter()
+                .map(|(name, expr)| format!("{}: {}", name, expr_summary(expr)))
+                .collect();
+            ExecutionSummary {
+                kind: "tool".to_string(),
+                capability: Some(capability.clone()),
+                summary: Some(format!("{}({})", capability, arg_strs.join(", "))),
+            }
         }
     }
 }

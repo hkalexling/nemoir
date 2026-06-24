@@ -1,0 +1,11 @@
+workflow ExecShell {
+  stage @entry Run {
+    exec: os.shell(command: "echo hello")
+    output: {}
+  }
+
+  stage @exit Fin {
+    prompt: "done"
+    output: { summary: string }
+  }
+}

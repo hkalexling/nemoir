@@ -12,6 +12,7 @@ pub struct ResolvedStage {
     pub inputs: Vec<StageInputRef>,
     pub outputs: Vec<OutputField>,
     pub requires: Vec<Ident>,
+    pub exec: Option<ExecDecl>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +101,7 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
                 StageBodyItem::Input(_) => "input",
                 StageBodyItem::Output(_) => "output",
                 StageBodyItem::Requires(_) => "requires",
+                StageBodyItem::Exec(_) => "exec",
             };
             if seen_keys.contains_key(key) {
                 return Err(Diagnostic::NameError(NameError {
@@ -120,11 +122,62 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
         let mut inputs: Vec<StageInputRef> = Vec::new();
         let mut outputs: Vec<OutputField> = Vec::new();
         let mut requires: Vec<Ident> = Vec::new();
+        let mut exec: Option<ExecDecl> = None;
 
         for item in &stage.items {
             match item {
                 StageBodyItem::Prompt(p) => {
                     prompt = Some(p.clone());
+                }
+                StageBodyItem::Exec(e) => {
+                    // Resolve exec arg refs: Stage.field must exist
+                    for arg in &e.args {
+                        if let ExecValue::Ref(ref r) = &arg.value {
+                            if !stage_map.contains_key(&r.stage.text) {
+                                return Err(Diagnostic::NameError(NameError {
+                                    message: format!(
+                                        "unknown stage `{}` in exec arg",
+                                        r.stage.text
+                                    ),
+                                    filename: filename.to_string(),
+                                    label: Some((
+                                        r.stage.span.start,
+                                        r.stage.span.end,
+                                        format!("stage `{}` not found", r.stage.text),
+                                    )),
+                                    help: None,
+                                }));
+                            }
+                            let ref_stage_idx = stage_map[&r.stage.text];
+                            let ref_stage = &ast.stages[ref_stage_idx];
+                            let field_exists = ref_stage.items.iter().any(|item| {
+                                if let StageBodyItem::Output(fields) = item {
+                                    fields.iter().any(|f| f.name.text == r.field.text)
+                                } else {
+                                    false
+                                }
+                            });
+                            if !field_exists {
+                                return Err(Diagnostic::NameError(NameError {
+                                    message: format!(
+                                        "unknown output field `{}` on stage `{}` in exec arg",
+                                        r.field.text, r.stage.text
+                                    ),
+                                    filename: filename.to_string(),
+                                    label: Some((
+                                        r.field.span.start,
+                                        r.field.span.end,
+                                        format!(
+                                            "`{}` has no output named `{}`",
+                                            r.stage.text, r.field.text
+                                        ),
+                                    )),
+                                    help: None,
+                                }));
+                            }
+                        }
+                    }
+                    exec = Some(e.clone());
                 }
                 StageBodyItem::Input(refs) => {
                     // Resolve each input ref: stage must exist, field must exist on that stage
@@ -332,18 +385,23 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
         let prompt = match prompt {
             Some(p) => p,
             None => {
-                return Err(Diagnostic::ShapeError(ShapeError {
-                    message: format!("stage `{}` is missing required `prompt:`", stage.name.text),
-                    filename: filename.to_string(),
-                    label: Some((
-                        stage.name.span.start,
-                        stage.name.span.end,
-                        format!("stage `{}` has no prompt", stage.name.text),
-                    )),
-                    help: Some(
-                        "every stage must have a `prompt:` field with a string value".into(),
-                    ),
-                }));
+                if exec.is_some() {
+                    // Deterministic stages may omit prompt.
+                    Spanned::new(String::new(), stage.name.span.clone())
+                } else {
+                    return Err(Diagnostic::ShapeError(ShapeError {
+                        message: format!("stage `{}` is missing required `prompt:`", stage.name.text),
+                        filename: filename.to_string(),
+                        label: Some((
+                            stage.name.span.start,
+                            stage.name.span.end,
+                            format!("stage `{}` has no prompt", stage.name.text),
+                        )),
+                        help: Some(
+                            "every stage must have a `prompt:` field with a string value".into(),
+                        ),
+                    }));
+                }
             }
         };
 
@@ -355,6 +413,7 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
             inputs,
             outputs,
             requires,
+            exec,
         });
     }
 

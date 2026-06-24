@@ -12,6 +12,7 @@ use serde_yaml;
 pub fn validate(rw: &ResolvedWorkflow, filename: &str) -> Result<Vec<Vec<Transition>>, Diagnostic> {
     validate_shape(rw, filename)?;
     validate_stage_capabilities(rw, filename)?;
+    validate_exec(rw, filename)?;
     validate_policies(rw, filename)?;
     let transitions = infer_transitions(rw, filename)?;
 
@@ -56,6 +57,123 @@ fn validate_stage_capabilities(rw: &ResolvedWorkflow, filename: &str) -> Result<
                         cap.span.start,
                         cap.span.end,
                         format!("`{}` is not a known NemoIR capability", cap.text),
+                    )),
+                    help: None,
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_exec(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic> {
+    let input_names: HashSet<&str> = rw.inputs.iter().map(|i| i.name.text.as_str()).collect();
+    for stage in &rw.stages {
+        let Some(ref exec) = stage.exec else {
+            continue;
+        };
+        // Exec capability must be known.
+        if !capabilities::is_known_capability(&exec.capability.text) {
+            return Err(Diagnostic::NameError(NameError {
+                message: format!(
+                    "unknown exec capability `{}` in stage `{}`",
+                    exec.capability.text, stage.name.text
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    exec.capability.span.start,
+                    exec.capability.span.end,
+                    format!(
+                        "`{}` is not a known NemoIR capability",
+                        exec.capability.text
+                    ),
+                )),
+                help: None,
+            }));
+        }
+        // Validate args
+        let spec = capabilities::get_capability(&exec.capability.text).unwrap();
+        let mut seen_params: HashSet<&str> = HashSet::new();
+        for arg in &exec.args {
+            if seen_params.contains(arg.name.text.as_str()) {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!(
+                        "duplicate exec arg `{}` in stage `{}`",
+                        arg.name.text, stage.name.text
+                    ),
+                    filename: filename.to_string(),
+                    label: Some((
+                        arg.name.span.start,
+                        arg.name.span.end,
+                        format!("arg `{}` appears more than once", arg.name.text),
+                    )),
+                    help: None,
+                }));
+            }
+            seen_params.insert(arg.name.text.as_str());
+            // Must be a required param of the capability
+            if !spec.has_required_param(&arg.name.text) {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!(
+                        "unknown exec arg `{}` for capability `{}` in stage `{}`",
+                        arg.name.text, exec.capability.text, stage.name.text
+                    ),
+                    filename: filename.to_string(),
+                    label: Some((
+                        arg.name.span.start,
+                        arg.name.span.end,
+                        format!(
+                            "`{}` is not a required parameter of `{}`",
+                            arg.name.text, exec.capability.text
+                        ),
+                    )),
+                    help: None,
+                }));
+            }
+            // Validate arg value refs
+            match &arg.value {
+                ExecValue::Ref(_r) => {
+                    // Stage.field ref — validated in resolve.rs already
+                    // (field existence checked there)
+                }
+                ExecValue::InputRef(id) => {
+                    if !input_names.contains(id.text.as_str()) {
+                        return Err(Diagnostic::NameError(NameError {
+                            message: format!(
+                                "unknown workflow input `{}` in exec arg in stage `{}`",
+                                id.text, stage.name.text
+                            ),
+                            filename: filename.to_string(),
+                            label: Some((
+                                id.span.start,
+                                id.span.end,
+                                format!("`{}` is not a workflow input", id.text),
+                            )),
+                            help: None,
+                        }));
+                    }
+                }
+                ExecValue::String(_) => {
+                    // String literal — always valid
+                }
+            }
+        }
+        // All required catalog params must be provided
+        for param in spec.required_params {
+            if !seen_params.contains(param.name) {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!(
+                        "missing required exec arg `{}` for capability `{}` in stage `{}`",
+                        param.name, exec.capability.text, stage.name.text
+                    ),
+                    filename: filename.to_string(),
+                    label: Some((
+                        exec.capability.span.start,
+                        exec.capability.span.end,
+                        format!(
+                            "`{}` requires parameter `{}`",
+                            exec.capability.text, param.name
+                        ),
                     )),
                     help: None,
                 }));

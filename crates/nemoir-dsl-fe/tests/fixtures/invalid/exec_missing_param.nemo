@@ -1,0 +1,11 @@
+workflow ExecMissingParam {
+  stage @entry Bad {
+    exec: os.shell()
+    output: {}
+  }
+
+  stage @exit Fin {
+    prompt: "done"
+    output: { summary: string }
+  }
+}

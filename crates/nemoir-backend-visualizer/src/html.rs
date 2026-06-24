@@ -225,6 +225,14 @@ var cy = cytoscape({{
       }}
     }},
     {{
+      selector: 'node[?isTool]',
+      style: {{
+        'border-color': '#0056d2',
+        'border-width': 3,
+        'background-color': '#cfe2ff',
+      }}
+    }},
+    {{
       selector: 'node:selected',
       style: {{
         'border-color': '#0056d2',
@@ -404,11 +412,17 @@ function showNodeInspector(el, node) {{
     return '<div class="trans-item">[' + t.priority + '] ' + escContentForInner(t.to) + ' — ' + escContentForInner(t.reason) + ' — ' + escContentForInner(t.guard_summary) + '</div>';
   }}).join('');
 
+  var execHtml = '';
+  if (d.execution && d.execution.kind === 'tool' && d.execution.summary) {{
+    execHtml = '<div class="section"><div class="section-label">Execution</div><div class="section-content">exec: ' + escContentForInner(d.execution.summary) + '</div></div>';
+  }}
+
   el.innerHTML =
     '<h3>State: ' + escContentForInner(d.id) + '</h3>' +
     '<div class="section">' + badges.join(' ') + '</div>' +
     (annotationsStr ? '<div class="section"><div class="section-label">Annotations</div><div class="section-content">' + escContentForInner(annotationsStr) + '</div></div>' : '') +
     '<div class="section"><div class="section-label">Prompt</div><div class="section-content">' + promptStr + '</div></div>' +
+    execHtml +
     '<div class="section"><div class="section-label">Reads</div><div class="section-content">' + (readsHtml || 'none') + '</div></div>' +
     '<div class="section"><div class="section-label">Writes</div><div class="section-content">' + (writesHtml || 'none') + '</div></div>' +
     '<div class="section"><div class="section-label">Required Capabilities</div><div class="section-content">' + (capsHtml || 'none') + '</div></div>' +

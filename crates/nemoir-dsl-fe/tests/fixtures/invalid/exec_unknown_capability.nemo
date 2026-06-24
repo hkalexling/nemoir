@@ -1,0 +1,11 @@
+workflow ExecBad {
+  stage @entry Bad {
+    exec: unknown.capability(x: "y")
+    output: {}
+  }
+
+  stage @exit Fin {
+    prompt: "done"
+    output: { summary: string }
+  }
+}

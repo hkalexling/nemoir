@@ -1,0 +1,18 @@
+workflow ExecFsWrite {
+  input { out_path: path }
+
+  stage @entry Produce {
+    prompt: "produce content"
+    output: { content: string }
+  }
+
+  stage Write {
+    exec: fs.write(path: out_path, content: Produce.content)
+    output: {}
+  }
+
+  stage @exit Fin {
+    prompt: "done"
+    output: { summary: string }
+  }
+}

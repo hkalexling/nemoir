@@ -1,0 +1,11 @@
+workflow UnknownExecInputRef {
+  stage @entry Run {
+    exec: fs.read(path: none_such_input)
+    output: { content: string }
+  }
+
+  stage @exit Fin {
+    prompt: "done"
+    output: { summary: string }
+  }
+}
