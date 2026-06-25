@@ -181,6 +181,8 @@ pub enum Guard {
     Missing { r#ref: Ref },
     #[serde(rename = "eq")]
     Eq { left: Expr, right: Expr },
+    #[serde(rename = "if")]
+    If { cond: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -223,5 +225,17 @@ pub enum Expr {
     Or {
         #[serde(default)]
         exprs: Vec<Expr>,
+    },
+    #[serde(rename = "compare")]
+    Compare {
+        op: String,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    #[serde(rename = "binop")]
+    BinOp {
+        op: String,
+        left: Box<Expr>,
+        right: Box<Expr>,
     },
 }

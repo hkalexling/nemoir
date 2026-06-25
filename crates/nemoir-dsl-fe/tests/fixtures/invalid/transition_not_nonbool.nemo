@@ -1,0 +1,13 @@
+workflow TransitionNotNonBool {
+  stage@entry S {
+    prompt: "start"
+    output: {
+      score: number
+    }
+    // `not` on a `number` operand is not valid — `not` requires bool
+    transition if not score => A
+  }
+  stage@exit A {
+    prompt: "done"
+  }
+}

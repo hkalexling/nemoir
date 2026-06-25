@@ -74,3 +74,70 @@ fn lower_policy_command_allowlist() {
         panic!("expected Not from in-lowering, got {:?}", cond_in);
     }
 }
+
+#[test]
+fn lower_judge_candidate_golden() {
+    let source = include_str!("fixtures/judge_candidate.nemo");
+    let ir = lower(source, "judge_candidate.nemo").expect("lowering should succeed");
+
+    let generated_yaml = serde_yaml::to_string(&ir).expect("YAML serialization should succeed");
+
+    let expected_yaml = include_str!("fixtures/judge_candidate-ir.yml");
+
+    // Parse both as generic YAML values and compare structurally
+    let generated: serde_yaml::Value =
+        serde_yaml::from_str(&generated_yaml).expect("generated YAML should be valid");
+    let expected: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("expected YAML should be valid");
+
+    if generated != expected {
+        eprintln!("=== GENERATED YAML ===");
+        eprintln!("{}", generated_yaml);
+        eprintln!("=== EXPECTED YAML ===");
+        eprintln!("{}", expected_yaml);
+        panic!("generated YAML does not match expected YAML");
+    }
+}
+
+#[test]
+fn lower_else_before_if_gets_lowest_priority() {
+    // Regression: Plan §3.2 requires "transition else emits Guard::Always at
+    // the lowest priority." An else placed before a guarded transition must
+    // NOT shadow it — else gets the highest priority number (lowest match
+    // priority) regardless of source position.
+    let source = r#"
+workflow ElseShadow {
+  input { eps: number }
+  stage@entry S {
+    prompt: "x"
+    output: { score: number }
+    transition else => Reject
+    transition if score > eps => Accept
+  }
+  stage@exit Accept { prompt: "a" }
+  stage@exit Reject { prompt: "r" }
+}
+"#;
+    let ir = lower(source, "else_shadow.nemo").expect("lowering should succeed");
+    let s = ir
+        .nodes
+        .iter()
+        .find(|n| n.id == "S")
+        .expect("stage S should exist");
+    assert_eq!(s.transitions.len(), 2, "should have 2 transitions");
+    assert_eq!(
+        s.transitions[0].to, "Accept",
+        "guarded transition should be first (priority 0)"
+    );
+    assert_eq!(s.transitions[0].priority, 0);
+    assert_eq!(
+        s.transitions[1].to, "Reject",
+        "else transition should be last (lowest priority)"
+    );
+    assert_eq!(s.transitions[1].priority, 1);
+    // Else must be Guard::Always
+    assert!(
+        matches!(s.transitions[1].guard, nemoir_ir::Guard::Always),
+        "else transition must be Guard::Always"
+    );
+}

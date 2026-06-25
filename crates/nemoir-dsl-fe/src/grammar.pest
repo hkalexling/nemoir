@@ -58,22 +58,42 @@ require_item = {
     dotted_ident ~ ("(" ~ ident ~ ("," ~ ident)* ~ ")")?
 }
 
-not_kw = { "not" }
+not_kw = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") }
 and_kw = { "and" }
 or_kw  = { "or" }
 dot = { "." }
 
-policy_expr = { policy_or }
+compare_op = { ">=" | "<=" | ">" | "<" }     // NO == or !=
+add_op     = { "+" | "-" }
+mul_op     = { "*" | "/" }
+unary_minus = { "-" }
 
-policy_or   = { policy_and ~ (or_kw ~ policy_and)* }
-policy_and  = { policy_not ~ (and_kw ~ policy_not)* }
-policy_not  = { not_kw* ~ policy_primary }
+// Unified expression tower: used by both policy conditions and transition conditions.
+// Backward-compatible: existing policy expressions parse identically.
 
-policy_primary = {
-    "(" ~ policy_expr ~ ")"
+policy_expr = { or_expr }
+
+or_expr   = { and_expr ~ (or_kw ~ and_expr)* }
+and_expr  = { not_expr ~ (and_kw ~ not_expr)* }
+not_expr  = { not_kw* ~ compare_expr }
+compare_expr = { add_expr ~ compare_op ~ add_expr | add_expr }
+add_expr  = { mul_expr ~ (add_op ~ mul_expr)* }
+mul_expr  = { unary_expr ~ (mul_op ~ unary_expr)* }
+unary_expr = { unary_minus* ~ primary }
+
+primary = {
+    "(" ~ or_expr ~ ")"
     | call_or_in
+    | node_ref
+    | number_literal
     | policy_ref
 }
+
+policy_ref = { !dot ~ ident }
+
+node_ref = { ident ~ "." ~ ident }
+
+number_literal = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 
 call_or_in = {
     ident ~ (
@@ -82,11 +102,9 @@ call_or_in = {
     )
 }
 
-policy_ref = { !(dot | "in") ~ ident }
-
 policy_arg_list = { policy_value ~ ("," ~ policy_value)* }
 policy_array  = { "[" ~ policy_value ~ ("," ~ policy_value)* ~ "]" }
-policy_value  = { single_line_string | ident }
+policy_value  = { number_literal | single_line_string | ident }
 
 stage = {
     "stage" ~ annotation? ~ ident ~ "{" ~
@@ -97,8 +115,16 @@ stage = {
 annotation = @{ "@" ~ ident }
 
 stage_body_item = {
-    prompt_decl | stage_input | output_block | requires_block | exec_decl
+    transition_block | prompt_decl | stage_input | output_block | requires_block | exec_decl
 }
+
+transition_block = {
+    (transition_decl ~ ","?)+
+}
+
+transition_decl = { "transition" ~ (transition_cond | transition_else) ~ "=>" ~ ident }
+transition_cond = { "if" ~ or_expr }
+transition_else = { "else" }
 
 prompt_decl = {
     "prompt" ~ ":" ~ string

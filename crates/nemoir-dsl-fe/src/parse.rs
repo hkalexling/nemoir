@@ -9,65 +9,86 @@ use crate::diagnostics::{Diagnostic, ParseError};
 pub struct NemoParser;
 
 pub fn parse_source(source: &str, filename: &str) -> Result<WorkflowAst, Diagnostic> {
-    let pairs = NemoParser::parse(Rule::workflow, source).map_err(|err| {
-        let (start, end) = match err.location {
-            pest::error::InputLocation::Pos(p) => (p, p + 1),
-            pest::error::InputLocation::Span((s, e)) => (s, e),
-        };
-        let msg = match err.variant {
-            pest::error::ErrorVariant::ParsingError {
-                positives,
-                negatives: _,
-            } => {
-                let expected: Vec<&str> = positives
-                    .iter()
-                    .map(|r| match r {
-                        Rule::string => "a quoted string",
-                        Rule::ident => "an identifier",
-                        Rule::dotted_ident => "a capability name",
-                        Rule::type_base => "a type (string, bool, path)",
-                        Rule::input_block => "input { ... }",
-                        Rule::input_field => "an input field (name: type)",
-                        Rule::policy_block => "policy { ... }",
-                        Rule::policy_expr => "a policy condition",
-                        Rule::policy_value => "an identifier or string literal",
-                        Rule::stage => "stage declaration",
-                        Rule::stage_body_item => "prompt:, input:, output:, requires:, or exec:",
-                        Rule::prompt_decl => "prompt:",
-                        Rule::stage_input => "input:",
-                        Rule::input_ref => "stage field reference like Stage.field",
-                        Rule::output_block => "output: { ... }",
-                        Rule::output_field => "an output field (name: type)",
-                        Rule::requires_block => "requires:",
-                        Rule::exec_decl => "exec: capability(args)",
-                        Rule::exec_arg => "exec arg name: value",
-                        Rule::exec_value => "a string literal or Stage.field reference",
-                        Rule::bool_branches => "{ true => X false => Y }",
-                        Rule::before_policy => "before policy",
-                        Rule::deny_policy => "deny policy",
-                        Rule::cap_call => "a capability call",
-                        Rule::require_item => "a required capability",
-                        Rule::annotation => "@entry or @exit annotation",
-                        Rule::workflow => "workflow",
-                        _ => "unknown token",
-                    })
-                    .collect();
-                if expected.is_empty() {
-                    "unexpected token".to_string()
-                } else {
-                    format!("expected {}", expected.join(" or "))
-                }
+    let pairs = match NemoParser::parse(Rule::workflow, source) {
+        Ok(pairs) => pairs,
+        Err(err) => {
+            let (start, end) = match err.location {
+                pest::error::InputLocation::Pos(p) => (p, p + 1),
+                pest::error::InputLocation::Span((s, e)) => (s, e),
+            };
+            // §5.2: produce a clear diagnostic for == / != (numeric equality not supported)
+            let check_start = start.saturating_sub(1);
+            let check_end = (start + 3).min(source.len());
+            if check_start < check_end
+                && (source[check_start..check_end].contains("==")
+                    || source[check_start..check_end].contains("!="))
+            {
+                return Err(Diagnostic::ParseError(ParseError {
+                    message: "numeric equality (`==`/`!=`) is not supported; use ordering predicates (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
+                    filename: filename.to_string(),
+                    label: Some((start, end, "`==` or `!=` not allowed in expressions".into())),
+                    help: Some(
+                        "see docs/dsl-and-ir.md §6 for the ordering-only numeric rule".into(),
+                    ),
+                }));
             }
-            pest::error::ErrorVariant::CustomError { message } => message,
-        };
-        let label_msg = format!("{} {}", "here", &msg);
-        Diagnostic::ParseError(ParseError {
-            message: format!("parse error: {}", msg),
-            filename: filename.to_string(),
-            label: Some((start, end, label_msg)),
-            help: None,
-        })
-    })?;
+            let msg = match err.variant {
+                pest::error::ErrorVariant::ParsingError {
+                    positives,
+                    negatives: _,
+                } => {
+                    let expected: Vec<&str> = positives
+                        .iter()
+                        .map(|r| match r {
+                            Rule::string => "a quoted string",
+                            Rule::ident => "an identifier",
+                            Rule::dotted_ident => "a capability name",
+                            Rule::type_base => "a type (string, bool, path)",
+                            Rule::input_block => "input { ... }",
+                            Rule::input_field => "an input field (name: type)",
+                            Rule::policy_block => "policy { ... }",
+                            Rule::policy_expr => "a policy condition",
+                            Rule::policy_value => "an identifier or string literal",
+                            Rule::stage => "stage declaration",
+                            Rule::stage_body_item => {
+                                "prompt:, input:, output:, requires:, or exec:"
+                            }
+                            Rule::prompt_decl => "prompt:",
+                            Rule::stage_input => "input:",
+                            Rule::input_ref => "stage field reference like Stage.field",
+                            Rule::output_block => "output: { ... }",
+                            Rule::output_field => "an output field (name: type)",
+                            Rule::requires_block => "requires:",
+                            Rule::exec_decl => "exec: capability(args)",
+                            Rule::exec_arg => "exec arg name: value",
+                            Rule::exec_value => "a string literal or Stage.field reference",
+                            Rule::bool_branches => "{ true => X false => Y }",
+                            Rule::before_policy => "before policy",
+                            Rule::deny_policy => "deny policy",
+                            Rule::cap_call => "a capability call",
+                            Rule::require_item => "a required capability",
+                            Rule::annotation => "@entry or @exit annotation",
+                            Rule::workflow => "workflow",
+                            _ => "unknown token",
+                        })
+                        .collect();
+                    if expected.is_empty() {
+                        "unexpected token".to_string()
+                    } else {
+                        format!("expected {}", expected.join(" or "))
+                    }
+                }
+                pest::error::ErrorVariant::CustomError { message } => message,
+            };
+            let label_msg = format!("{} {}", "here", &msg);
+            return Err(Diagnostic::ParseError(ParseError {
+                message: format!("parse error: {}", msg),
+                filename: filename.to_string(),
+                label: Some((start, end, label_msg)),
+                help: None,
+            }));
+        }
+    };
 
     let workflow_pair = pairs.into_iter().next().unwrap();
     parse_workflow(workflow_pair)
@@ -217,12 +238,12 @@ fn parse_before_policy(pair: pest::iterators::Pair<Rule>) -> PolicyDecl {
 }
 
 fn parse_policy_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
-    // policy_expr -> policy_or
-    let inner = pair.into_inner().next().expect("policy_or");
-    parse_policy_or(inner)
+    // policy_expr -> or_expr
+    let inner = pair.into_inner().next().expect("or_expr");
+    parse_or_expr(inner)
 }
 
-fn parse_policy_or(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+fn parse_or_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
     let items: Vec<_> = pair.into_inner().collect();
     if items.is_empty() {
         return PolicyExpr::Ref(Ident {
@@ -230,13 +251,13 @@ fn parse_policy_or(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
             span: Span::new(0, 0),
         });
     }
-    // First is always policy_and, then pairs of (or_kw, policy_and)
-    let mut exprs = vec![parse_policy_and(items[0].clone())];
+    // First is always and_expr, then pairs of (or_kw, and_expr)
+    let mut exprs = vec![parse_and_expr(items[0].clone())];
     let mut idx = 1;
     while idx < items.len() {
-        // skip or_kw, parse next policy_and
+        // skip or_kw, parse next and_expr
         idx += 1;
-        exprs.push(parse_policy_and(items[idx].clone()));
+        exprs.push(parse_and_expr(items[idx].clone()));
         idx += 1;
     }
     if exprs.len() == 1 {
@@ -246,7 +267,7 @@ fn parse_policy_or(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
     }
 }
 
-fn parse_policy_and(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+fn parse_and_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
     let items: Vec<_> = pair.into_inner().collect();
     if items.is_empty() {
         return PolicyExpr::Ref(Ident {
@@ -254,13 +275,13 @@ fn parse_policy_and(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
             span: Span::new(0, 0),
         });
     }
-    // First is always policy_not, then pairs of (and_kw, policy_not)
-    let mut exprs = vec![parse_policy_not(items[0].clone())];
+    // First is always not_expr, then pairs of (and_kw, not_expr)
+    let mut exprs = vec![parse_not_expr(items[0].clone())];
     let mut idx = 1;
     while idx < items.len() {
-        // skip and_kw, parse next policy_not
+        // skip and_kw, parse next not_expr
         idx += 1;
-        exprs.push(parse_policy_not(items[idx].clone()));
+        exprs.push(parse_not_expr(items[idx].clone()));
         idx += 1;
     }
     if exprs.len() == 1 {
@@ -270,7 +291,7 @@ fn parse_policy_and(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
     }
 }
 
-fn parse_policy_not(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
     let items: Vec<_> = pair.into_inner().collect();
     let mut not_count = 0usize;
     let mut idx = 0;
@@ -278,16 +299,127 @@ fn parse_policy_not(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
         not_count += 1;
         idx += 1;
     }
-    let primary = parse_policy_primary(items[idx].clone());
-    (0..not_count).fold(primary, |acc, _| PolicyExpr::Not {
+    let compare = parse_compare_expr(items[idx].clone());
+    (0..not_count).fold(compare, |acc, _| PolicyExpr::Not {
         expr: Box::new(acc),
     })
 }
 
-fn parse_policy_primary(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
-    let inner = pair.into_inner().next().expect("policy_primary inner");
+fn parse_compare_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    if items.is_empty() {
+        return PolicyExpr::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        });
+    }
+    let left = parse_add_expr(items[0].clone());
+    // Optional compare op + right operand
+    if items.len() >= 3 {
+        // items: [add_expr, compare_op, add_expr]
+        let op_text = items[1].as_str().to_string();
+        let right = parse_add_expr(items[2].clone());
+        PolicyExpr::Compare {
+            op: op_text,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    } else {
+        left
+    }
+}
+
+fn parse_add_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    if items.is_empty() {
+        return PolicyExpr::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        });
+    }
+    // First is always mul_expr, then pairs of (add_op, mul_expr)
+    let mut expr = parse_mul_expr(items[0].clone());
+    let mut idx = 1;
+    while idx + 1 < items.len() {
+        let op_text = items[idx].as_str().to_string();
+        idx += 1;
+        let right = parse_mul_expr(items[idx].clone());
+        idx += 1;
+        expr = PolicyExpr::BinOp {
+            op: op_text,
+            left: Box::new(expr),
+            right: Box::new(right),
+        };
+    }
+    expr
+}
+
+fn parse_mul_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    if items.is_empty() {
+        return PolicyExpr::Ref(Ident {
+            text: String::new(),
+            span: Span::new(0, 0),
+        });
+    }
+    // First is always unary_expr, then pairs of (mul_op, unary_expr)
+    let mut expr = parse_unary_expr(items[0].clone());
+    let mut idx = 1;
+    while idx < items.len() {
+        let op_text = items[idx].as_str().to_string();
+        idx += 1;
+        let right = parse_unary_expr(items[idx].clone());
+        idx += 1;
+        expr = PolicyExpr::BinOp {
+            op: op_text,
+            left: Box::new(expr),
+            right: Box::new(right),
+        };
+    }
+    expr
+}
+
+fn parse_unary_expr(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let items: Vec<_> = pair.into_inner().collect();
+    let mut idx = 0usize;
+    // Count leading unary minus signs (now a named rule — pest captures them as pairs)
+    let mut minus_count = 0usize;
+    while idx < items.len() && items[idx].as_rule() == Rule::unary_minus {
+        minus_count += 1;
+        idx += 1;
+    }
+    let primary = parse_primary(items[idx].clone());
+    if minus_count.is_multiple_of(2) {
+        // Even number of minuses cancel out
+        primary
+    } else {
+        // Odd => negate: 0 - expr
+        let zero = PolicyExpr::Number(Spanned::new(0.0, Span::new(0, 0)));
+        PolicyExpr::BinOp {
+            op: "-".to_string(),
+            left: Box::new(zero),
+            right: Box::new(primary),
+        }
+    }
+}
+
+fn parse_primary(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
+    let inner = pair.into_inner().next().expect("primary inner");
     match inner.as_rule() {
         Rule::policy_ref => PolicyExpr::Ref(parse_ident(inner.into_inner().next().expect("ident"))),
+        Rule::node_ref => {
+            let mut ci = inner.into_inner();
+            let stage = parse_ident(ci.next().expect("stage"));
+            let field = parse_ident(ci.next().expect("field"));
+            let span = Span::new(stage.span.start, field.span.end);
+            PolicyExpr::NodeRef { stage, field, span }
+        }
+        Rule::number_literal => {
+            let text = inner.as_str();
+            let value: f64 = text.parse().unwrap_or(0.0);
+            let span = span_from_pair(&inner);
+            PolicyExpr::Number(Spanned::new(value, span))
+        }
         Rule::call_or_in => {
             let mut ci = inner.into_inner();
             let ident_pair = ci.next().expect("ident");
@@ -315,16 +447,12 @@ fn parse_policy_primary(pair: pest::iterators::Pair<Rule>) -> PolicyExpr {
                         options,
                     }
                 }
-                _ => {
-                    // Unexpected token after ident in call_or_in
-                    PolicyExpr::Ref(ident)
-                }
+                _ => PolicyExpr::Ref(ident),
             }
         }
         _ => {
-            // Parenthesized: "(" ~ policy_expr ~ ")"
-            // inner IS the policy_expr pair (the parens are silent literals)
-            parse_policy_expr(inner)
+            // Parenthesized: "(" ~ or_expr ~ ")"
+            parse_or_expr(inner)
         }
     }
 }
@@ -341,6 +469,12 @@ fn parse_policy_value(pair: pest::iterators::Pair<Rule>) -> PolicyExprValue {
     let inner = pair.into_inner().next();
     match inner {
         Some(p) if p.as_rule() == Rule::ident => PolicyExprValue::Ref(parse_ident(p)),
+        Some(p) if p.as_rule() == Rule::number_literal => {
+            let text = p.as_str();
+            let value: f64 = text.parse().unwrap_or(0.0);
+            let span = span_from_pair(&p);
+            PolicyExprValue::Number(Spanned::new(value, span))
+        }
         Some(p) if p.as_rule() == Rule::single_line_string => {
             let raw = p.as_str();
             let processed = process_policy_string_literal(raw);
@@ -424,6 +558,9 @@ fn parse_stage(pair: pest::iterators::Pair<Rule>) -> Result<StageDecl, Diagnosti
             Rule::exec_decl => {
                 items.push(parse_exec_decl(body_item)?);
             }
+            Rule::transition_block => {
+                items.push(parse_transition_block(body_item)?);
+            }
             _ => {}
         }
     }
@@ -502,6 +639,53 @@ fn parse_bool_branches(pair: pest::iterators::Pair<Rule>) -> BoolBranches {
 
 fn parse_requires_block(pair: pest::iterators::Pair<Rule>) -> Vec<Ident> {
     pair.into_inner().map(parse_ident).collect()
+}
+
+fn parse_transition_block(pair: pest::iterators::Pair<Rule>) -> Result<StageBodyItem, Diagnostic> {
+    let mut transitions = Vec::new();
+    for decl in pair.into_inner() {
+        if decl.as_rule() == Rule::transition_decl {
+            transitions.push(parse_transition_decl(decl));
+        }
+    }
+    Ok(StageBodyItem::Transition(transitions))
+}
+
+fn parse_transition_decl(pair: pest::iterators::Pair<Rule>) -> ExplicitTransition {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+    let first = inner.next().expect("transition cond or else");
+    match first.as_rule() {
+        Rule::transition_cond => {
+            // "if" ~ or_expr
+            let mut cond_inner = first.into_inner();
+            let expr_pair = cond_inner.next().expect("or_expr in transition_cond");
+            let cond = parse_or_expr(expr_pair);
+            let target = parse_ident(inner.next().expect("target stage"));
+            ExplicitTransition {
+                cond: Some(cond),
+                target,
+                span,
+            }
+        }
+        Rule::transition_else => {
+            // "else" — no condition
+            let target = parse_ident(inner.next().expect("target stage"));
+            ExplicitTransition {
+                cond: None,
+                target,
+                span,
+            }
+        }
+        _ => {
+            let fallback = parse_ident(inner.next().expect("fallback target"));
+            ExplicitTransition {
+                cond: None,
+                target: fallback,
+                span,
+            }
+        }
+    }
 }
 
 fn parse_exec_decl(pair: pest::iterators::Pair<Rule>) -> Result<StageBodyItem, Diagnostic> {

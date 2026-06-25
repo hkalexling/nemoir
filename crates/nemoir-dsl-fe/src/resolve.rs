@@ -13,6 +13,7 @@ pub struct ResolvedStage {
     pub outputs: Vec<OutputField>,
     pub requires: Vec<Ident>,
     pub exec: Option<ExecDecl>,
+    pub transitions: Vec<ExplicitTransition>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +103,7 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
                 StageBodyItem::Output(_) => "output",
                 StageBodyItem::Requires(_) => "requires",
                 StageBodyItem::Exec(_) => "exec",
+                StageBodyItem::Transition(_) => "transition",
             };
             if seen_keys.contains_key(key) {
                 return Err(Diagnostic::NameError(NameError {
@@ -123,6 +125,7 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
         let mut outputs: Vec<OutputField> = Vec::new();
         let mut requires: Vec<Ident> = Vec::new();
         let mut exec: Option<ExecDecl> = None;
+        let mut explicit_transitions: Vec<ExplicitTransition> = Vec::new();
 
         for item in &stage.items {
             match item {
@@ -379,6 +382,9 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
                 StageBodyItem::Requires(caps) => {
                     requires = caps.clone();
                 }
+                StageBodyItem::Transition(trans) => {
+                    explicit_transitions.extend(trans.clone());
+                }
             }
         }
 
@@ -390,7 +396,10 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
                     Spanned::new(String::new(), stage.name.span.clone())
                 } else {
                     return Err(Diagnostic::ShapeError(ShapeError {
-                        message: format!("stage `{}` is missing required `prompt:`", stage.name.text),
+                        message: format!(
+                            "stage `{}` is missing required `prompt:`",
+                            stage.name.text
+                        ),
                         filename: filename.to_string(),
                         label: Some((
                             stage.name.span.start,
@@ -405,6 +414,61 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
             }
         };
 
+        // Either/or check (§3.2/§3.5): bool-branches and explicit transitions cannot coexist.
+        let has_bool_branches = outputs.iter().any(|f| f.branches.is_some());
+        let has_explicit_transitions = !explicit_transitions.is_empty();
+        if has_bool_branches && has_explicit_transitions {
+            return Err(Diagnostic::TransitionError(TransitionError {
+                message: format!(
+                    "stage `{}` has both `bool_branches` and `transition` statements; choose one or the other",
+                    stage.name.text
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    stage.name.span.start,
+                    stage.name.span.end,
+                    "cannot mix bool_branches and explicit transitions".into(),
+                )),
+                help: None,
+            }));
+        }
+
+        // Desugar bool-branches (§3.5) into explicit transitions.
+        for output in &mut outputs {
+            if let Some(branches) = output.branches.take() {
+                // output.branches is now None (consumed via .take())
+                let not_cond = PolicyExpr::Not {
+                    expr: Box::new(PolicyExpr::Ref(output.name.clone())),
+                };
+                explicit_transitions.push(ExplicitTransition {
+                    cond: Some(PolicyExpr::Ref(output.name.clone())),
+                    target: branches.true_target,
+                    span: stage.name.span.clone(),
+                });
+                explicit_transitions.push(ExplicitTransition {
+                    cond: Some(not_cond),
+                    target: branches.false_target,
+                    span: stage.name.span.clone(),
+                });
+            }
+        }
+
+        // Resolve explicit transition targets.
+        for t in &explicit_transitions {
+            if !stage_map.contains_key(&t.target.text) {
+                return Err(Diagnostic::NameError(NameError {
+                    message: format!("transition target `{}` does not exist", t.target.text),
+                    filename: filename.to_string(),
+                    label: Some((
+                        t.target.span.start,
+                        t.target.span.end,
+                        format!("unknown stage `{}`", t.target.text),
+                    )),
+                    help: None,
+                }));
+            }
+        }
+
         resolved_stages.push(ResolvedStage {
             index: resolved_stages.len(),
             name: stage.name.clone(),
@@ -414,6 +478,7 @@ pub fn resolve(ast: WorkflowAst, filename: &str) -> Result<ResolvedWorkflow, Dia
             outputs,
             requires,
             exec,
+            transitions: explicit_transitions,
         });
     }
 

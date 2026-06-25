@@ -83,6 +83,29 @@ test_invalid!(
     "policy_unknown_trigger_param.nemo"
 );
 test_invalid!(
+    numeric_compare_nonnumeric,
+    "numeric_compare_nonnumeric.nemo"
+);
+test_invalid!(
+    bool_branches_and_transition_mixed,
+    "bool_branches_and_transition_mixed.nemo"
+);
+test_invalid!(
+    transition_unreachable_graph,
+    "transition_unreachable_graph.nemo"
+);
+test_invalid!(numeric_eq_operator, "numeric_eq_operator.nemo");
+test_invalid!(
+    transition_and_nonbool_operand,
+    "transition_and_nonbool_operand.nemo"
+);
+test_invalid!(transition_not_nonbool, "transition_not_nonbool.nemo");
+test_invalid!(transition_numeric_eq, "transition_numeric_eq.nemo");
+test_invalid!(transition_numeric_in, "transition_numeric_in.nemo");
+
+test_invalid!(transition_multiple_else, "transition_multiple_else.nemo");
+
+test_invalid!(
     policy_unknown_required_param,
     "policy_unknown_required_param.nemo"
 );
@@ -229,6 +252,78 @@ fn unknown_capability_policy_message() {
     assert!(
         msg.contains("unknown capability"),
         "expected 'unknown capability' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn numeric_eq_operator_message() {
+    let source = include_str!("fixtures/invalid/numeric_eq_operator.nemo");
+    let err = check(source, "numeric_eq_operator.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("numeric equality") && msg.contains("ordering predicates"),
+        "expected 'numeric equality' and 'ordering predicates' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn transition_and_nonbool_operand_message() {
+    let source = include_str!("fixtures/invalid/transition_and_nonbool_operand.nemo");
+    let err = check(source, "transition_and_nonbool_operand.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("bool") || msg.contains("bool operands"),
+        "expected 'bool' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn transition_not_nonbool_message() {
+    let source = include_str!("fixtures/invalid/transition_not_nonbool.nemo");
+    let err = check(source, "transition_not_nonbool.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not") && msg.contains("bool"),
+        "expected 'not' and 'bool' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn transition_numeric_eq_message() {
+    let source = include_str!("fixtures/invalid/transition_numeric_eq.nemo");
+    let err = check(source, "transition_numeric_eq.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("number") && msg.contains("compare predicate"),
+        "expected 'number' and 'compare predicate' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn transition_numeric_in_message() {
+    let source = include_str!("fixtures/invalid/transition_numeric_in.nemo");
+    let err = check(source, "transition_numeric_in.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("number"),
+        "expected 'number' in error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn transition_multiple_else_message() {
+    let source = include_str!("fixtures/invalid/transition_multiple_else.nemo");
+    let err = check(source, "transition_multiple_else.nemo").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("at most one") && msg.contains("else"),
+        "expected 'at most one' and 'else' in error, got: {}",
         msg
     );
 }

@@ -1,0 +1,18 @@
+workflow TransitionAndNonBool {
+  input {
+    eps: number
+  }
+
+  stage@entry A {
+    prompt: "start"
+    output: {
+      score: number?
+      ok: bool
+    }
+    // second operand to `and` is `score` (number), not a bool
+    transition if ok and score => B
+  }
+  stage@exit B {
+    prompt: "done"
+  }
+}

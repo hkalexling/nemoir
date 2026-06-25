@@ -1,0 +1,157 @@
+ir_version: '0.1'
+kind: workflow_ir
+source:
+  frontend: nemo_dsl
+  file: judge_candidate.nemo
+workflow:
+  id: JudgeCandidate
+  entry: Baseline
+  exits:
+  - Accept
+  - Confirm
+  - Reject
+  transition_semantics:
+    selection: first_match_by_priority
+    no_match: error_unless_exit
+inputs:
+- id: eps
+  type: number
+capabilities: []
+policies: []
+nodes:
+- id: Baseline
+  annotations:
+  - entry
+  prompt: Establish baseline score.
+  reads:
+  - ref:
+      kind: input
+      name: eps
+    optional: false
+    origin: implicit_entry_input
+  writes:
+  - name: score
+    type: number
+    optional: false
+  requires: []
+  transitions:
+  - to: Best
+    priority: 0
+    reason: fallthrough
+    guard:
+      kind: always
+- id: Best
+  annotations: []
+  prompt: Search for the best candidate.
+  reads: []
+  writes:
+  - name: score
+    type: number
+    optional: false
+  requires: []
+  transitions:
+  - to: JudgeCandidate
+    priority: 0
+    reason: fallthrough
+    guard:
+      kind: always
+- id: JudgeCandidate
+  annotations: []
+  prompt: Judge the candidate against best.
+  reads:
+  - ref:
+      kind: node_output
+      node: Baseline
+      field: score
+    optional: false
+    origin: dsl_stage_input
+  - ref:
+      kind: node_output
+      node: Best
+      field: score
+    optional: false
+    origin: dsl_stage_input
+  writes:
+  - name: score
+    type: number
+    optional: true
+  requires: []
+  transitions:
+  - to: Accept
+    priority: 0
+    reason: explicit_transition
+    guard:
+      kind: if
+      cond:
+        kind: compare
+        op: gt
+        left:
+          kind: binop
+          op: sub
+          left:
+            kind: ref
+            ref:
+              kind: node_output
+              node: JudgeCandidate
+              field: score
+          right:
+            kind: ref
+            ref:
+              kind: node_output
+              node: Best
+              field: score
+        right:
+          kind: ref
+          ref:
+            kind: input
+            name: eps
+  - to: Confirm
+    priority: 1
+    reason: explicit_transition
+    guard:
+      kind: if
+      cond:
+        kind: compare
+        op: gt
+        left:
+          kind: ref
+          ref:
+            kind: node_output
+            node: JudgeCandidate
+            field: score
+        right:
+          kind: ref
+          ref:
+            kind: node_output
+            node: Best
+            field: score
+  - to: Reject
+    priority: 2
+    reason: explicit_transition
+    guard:
+      kind: always
+- id: Accept
+  annotations:
+  - exit
+  prompt: Accepted
+  reads: []
+  writes: []
+  requires: []
+  transitions: []
+- id: Confirm
+  annotations:
+  - exit
+  prompt: Confirm
+  reads: []
+  writes: []
+  requires: []
+  transitions: []
+- id: Reject
+  annotations:
+  - exit
+  prompt: Rejected
+  reads: []
+  writes: []
+  requires: []
+  transitions: []
+

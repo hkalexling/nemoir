@@ -207,6 +207,26 @@ fn policy_expr_to_string(expr: &PolicyExpr) -> String {
             format!("{} in [{}]", value.text, opt_strs.join(", "))
         }
         PolicyExpr::Ref(id) => id.text.clone(),
+        PolicyExpr::Number(n) => format!("{}", n.value),
+        PolicyExpr::Compare { op, left, right } => {
+            format!(
+                "{} {} {}",
+                policy_expr_to_string(left),
+                op,
+                policy_expr_to_string(right)
+            )
+        }
+        PolicyExpr::BinOp { op, left, right } => {
+            format!(
+                "{} {} {}",
+                policy_expr_to_string(left),
+                op,
+                policy_expr_to_string(right)
+            )
+        }
+        PolicyExpr::NodeRef { stage, field, .. } => {
+            format!("{}.{}", stage.text, field.text)
+        }
     }
 }
 
@@ -214,6 +234,36 @@ fn policy_expr_value_to_string(val: &PolicyExprValue) -> String {
     match val {
         PolicyExprValue::Ref(id) => id.text.clone(),
         PolicyExprValue::String(s) => format!("\"{}\"", s.value),
+        PolicyExprValue::Number(n) => format!("{}", n.value),
+    }
+}
+
+/// Convert an f64 number literal to a serde_yaml::Value::Number.
+/// Handles the serde_yaml 0.9 limitation (no from_f64) by round-tripping
+/// floating-point values through YAML text parsing.
+///
+/// Non-finite values (NaN, infinity) are unreachable from the DSL grammar
+/// ([`number_literal`] only accepts finite decimal strings).  A
+/// `debug_assert!` documents this invariant; a non-finite input indicates
+/// a programming error.
+pub fn number_literal_value(n: f64) -> serde_yaml::Value {
+    debug_assert!(
+        n.is_finite(),
+        "number_literal_value received non-finite value {n}; \
+         the DSL grammar cannot author non-finite number literals — \
+         this indicates a programming error"
+    );
+    if n == (n as i64 as f64)
+        && n.fract() == 0.0
+        && n >= (i64::MIN as f64)
+        && n <= (i64::MAX as f64)
+    {
+        serde_yaml::Value::Number(serde_yaml::Number::from(n as i64))
+    } else {
+        let yaml_str = format!("{}", n);
+        serde_yaml::from_str(&yaml_str).unwrap_or(serde_yaml::Value::Number(
+            serde_yaml::Number::from(n as i64),
+        ))
     }
 }
 
@@ -266,6 +316,26 @@ fn lower_policy_expr(expr: &PolicyExpr, bound_names: &HashSet<String>) -> Expr {
         PolicyExpr::Ref(id) => Expr::Ref {
             r#ref: classify_ref_name(&id.text, bound_names),
         },
+        PolicyExpr::Number(n) => Expr::Literal {
+            ty: "number".to_string(),
+            value: number_literal_value(n.value),
+        },
+        PolicyExpr::Compare { op, left, right } => Expr::Compare {
+            op: op_symbol_to_name(op).to_string(),
+            left: Box::new(lower_policy_expr(left, bound_names)),
+            right: Box::new(lower_policy_expr(right, bound_names)),
+        },
+        PolicyExpr::BinOp { op, left, right } => Expr::BinOp {
+            op: op_symbol_to_name(op).to_string(),
+            left: Box::new(lower_policy_expr(left, bound_names)),
+            right: Box::new(lower_policy_expr(right, bound_names)),
+        },
+        PolicyExpr::NodeRef { stage, field, .. } => Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: stage.text.clone(),
+                field: field.text.clone(),
+            },
+        },
     }
 }
 
@@ -277,6 +347,10 @@ fn lower_value(val: &PolicyExprValue, bound_names: &HashSet<String>) -> Expr {
         PolicyExprValue::String(s) => Expr::Literal {
             ty: "string".to_string(),
             value: serde_yaml::Value::String(s.value.clone()),
+        },
+        PolicyExprValue::Number(n) => Expr::Literal {
+            ty: "number".to_string(),
+            value: number_literal_value(n.value),
         },
     }
 }

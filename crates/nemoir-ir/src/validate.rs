@@ -146,7 +146,13 @@ pub fn validate(ir: &WorkflowIr) -> Result<(), ValidationErrors> {
     }
 
     for node in &ir.nodes {
-        validate_stage_execution(node, &capability_set, &input_map, &writes_per_node, &mut errors);
+        validate_stage_execution(
+            node,
+            &capability_set,
+            &input_map,
+            &writes_per_node,
+            &mut errors,
+        );
     }
 
     validate_policy_refs(&ir.policies, &input_map, &capability_set, &mut errors);
@@ -296,6 +302,8 @@ fn expr_type<'a>(
         Expr::MethodCall { .. } => None,
         Expr::And { .. } => Some("bool"),
         Expr::Or { .. } => Some("bool"),
+        Expr::Compare { .. } => Some("bool"),
+        Expr::BinOp { .. } => Some("number"),
         Expr::Ref { r#ref } => resolve_ref_type(r#ref, writes_per_node, input_map),
         Expr::Literal { ty, .. } => Some(ty.as_str()),
     }
@@ -346,24 +354,233 @@ fn validate_guard_refs(
                 input_map,
                 errors,
             );
+            // Recurse into nested Compare/BinOp to validate their operands
+            // (same surface as Guard::If — plan §4.2).
+            validate_guard_expr_semantics(
+                left,
+                &node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            validate_guard_expr_semantics(
+                right,
+                &node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
 
             let left_ty = expr_type(left, writes_per_node, input_map);
             let right_ty = expr_type(right, writes_per_node, input_map);
             if let (Some(lt), Some(rt)) = (left_ty, right_ty) {
-                if lt != rt {
+                // §3.4: numeric equality is forbidden — use ordering predicates instead.
+                if lt == "number" || rt == "number" {
                     errors.push(
                         format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
-                        format!(
-                            "Guard::Eq compares incompatible types: '{}' vs '{}'",
-                            lt, rt
-                        ),
+                        "Guard::Eq does not support number operands; use a compare predicate (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
                     );
+                } else {
+                    // Plan §4.2: path≡path, path≡string, string≡string, bool≡bool are valid.
+                    // Symmetric for Guard::Eq (equality is commutative).
+                    let compatible = matches!(
+                        (lt, rt),
+                        ("path", "path")
+                            | ("path", "string")
+                            | ("string", "path")
+                            | ("string", "string")
+                            | ("bool", "bool")
+                    );
+                    if !compatible {
+                        errors.push(
+                            format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                            format!(
+                                "Guard::Eq compares incompatible types: '{}' vs '{}'",
+                                lt, rt
+                            ),
+                        );
+                    }
                 }
             }
+        }
+        Guard::If { cond } => {
+            validate_expr_refs(
+                cond,
+                &node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            let cond_ty = expr_type(cond, writes_per_node, input_map);
+            if cond_ty != Some("bool") {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    format!("Guard::If condition must be bool, got {:?}", cond_ty),
+                );
+            }
+            validate_guard_expr_semantics(
+                cond,
+                &node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
         }
     }
 }
 
+/// Semantic validation for expressions used in `Guard::If` conditions.
+/// Ensures Compare/BinOp operands are number-typed and ops are valid.
+fn validate_guard_expr_semantics(
+    expr: &Expr,
+    node_id: &str,
+    transition_idx: usize,
+    writes_per_node: &HashMap<String, HashMap<String, &Write>>,
+    input_map: &HashMap<String, &str>,
+    errors: &mut ValidationErrors,
+) {
+    match expr {
+        Expr::Compare { op, left, right } => {
+            let valid_ops = ["gt", "gte", "lt", "lte"];
+            if !valid_ops.contains(&op.as_str()) {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    format!(
+                        "unknown compare op '{}'; expected one of gt, gte, lt, lte",
+                        op
+                    ),
+                );
+            }
+            validate_guard_expr_semantics(
+                left,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            validate_guard_expr_semantics(
+                right,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            // Both operands must be number (plan §4.2)
+            let left_ty = expr_type(left, writes_per_node, input_map);
+            let right_ty = expr_type(right, writes_per_node, input_map);
+            if left_ty != Some("number") || right_ty != Some("number") {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    "compare requires number operands".into(),
+                );
+            }
+        }
+        Expr::BinOp { op, left, right } => {
+            let valid_ops = ["add", "sub", "mul", "div"];
+            if !valid_ops.contains(&op.as_str()) {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    format!("unknown binop '{}'; expected one of add, sub, mul, div", op),
+                );
+            }
+            validate_guard_expr_semantics(
+                left,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            validate_guard_expr_semantics(
+                right,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            let left_ty = expr_type(left, writes_per_node, input_map);
+            let right_ty = expr_type(right, writes_per_node, input_map);
+            if left_ty != Some("number") || right_ty != Some("number") {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    "binop requires number operands".into(),
+                );
+            }
+        }
+        Expr::Not { expr } => {
+            validate_guard_expr_semantics(
+                expr,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            // Plan §5: not requires a bool operand (mirrors and/or arms).
+            let inner_ty = expr_type(expr, writes_per_node, input_map);
+            if inner_ty != Some("bool") {
+                errors.push(
+                    format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                    format!("not operand must be bool, got {:?}", inner_ty),
+                );
+            }
+        }
+        Expr::And { exprs } => {
+            for e in exprs {
+                validate_guard_expr_semantics(
+                    e,
+                    node_id,
+                    transition_idx,
+                    writes_per_node,
+                    input_map,
+                    errors,
+                );
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = expr_type(e, writes_per_node, input_map);
+                if op_ty != Some("bool") {
+                    errors.push(
+                        format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                        format!("and operand must be bool, got {:?}", op_ty),
+                    );
+                }
+            }
+        }
+        Expr::Or { exprs } => {
+            for e in exprs {
+                validate_guard_expr_semantics(
+                    e,
+                    node_id,
+                    transition_idx,
+                    writes_per_node,
+                    input_map,
+                    errors,
+                );
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = expr_type(e, writes_per_node, input_map);
+                if op_ty != Some("bool") {
+                    errors.push(
+                        format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                        format!("or operand must be bool, got {:?}", op_ty),
+                    );
+                }
+            }
+        }
+        Expr::MethodCall { .. } => {
+            errors.push(
+                format!("nodes.{}.transitions[{}].guard", node_id, transition_idx),
+                "method calls are not supported in guard conditions".into(),
+            );
+        }
+        Expr::Ref { .. } | Expr::Literal { .. } => {}
+    }
+}
 fn validate_guard_output_ref(
     r: &Ref,
     node_id: &str,
@@ -464,6 +681,42 @@ fn validate_expr_refs(
                     errors,
                 );
             }
+        }
+        Expr::Compare { left, right, .. } => {
+            validate_expr_refs(
+                left,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            validate_expr_refs(
+                right,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+        }
+        Expr::BinOp { left, right, .. } => {
+            validate_expr_refs(
+                left,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
+            validate_expr_refs(
+                right,
+                node_id,
+                transition_idx,
+                writes_per_node,
+                input_map,
+                errors,
+            );
         }
     }
 }
@@ -845,10 +1098,7 @@ fn validate_exec_arg_expr(
                     if !writes.contains_key(field) {
                         errors.push(
                             path.clone(),
-                            format!(
-                                "exec arg refs unknown output '{}.{}'",
-                                node, field
-                            ),
+                            format!("exec arg refs unknown output '{}.{}'", node, field),
                         );
                     }
                 } else {
@@ -861,10 +1111,7 @@ fn validate_exec_arg_expr(
                 if !reads_set.contains(&key) {
                     errors.push(
                         path,
-                        format!(
-                            "exec arg refs '{}.{}' but not in node's reads",
-                            node, field
-                        ),
+                        format!("exec arg refs '{}.{}' but not in node's reads", node, field),
                     );
                 }
             }
@@ -882,7 +1129,9 @@ fn validate_exec_arg_expr(
         Expr::Not { .. }
         | Expr::MethodCall { .. }
         | Expr::And { .. }
-        | Expr::Or { .. } => {
+        | Expr::Or { .. }
+        | Expr::Compare { .. }
+        | Expr::BinOp { .. } => {
             errors.push(
                 path,
                 "only Ref and Literal expressions are allowed in exec args (MVP)".into(),
@@ -1186,6 +1435,14 @@ fn validate_policy_expr_refs(
                 );
             }
         }
+        Expr::Compare { left, right, .. } => {
+            validate_policy_expr_refs(left, policy_idx, path, input_map, bound_names, errors);
+            validate_policy_expr_refs(right, policy_idx, path, input_map, bound_names, errors);
+        }
+        Expr::BinOp { left, right, .. } => {
+            validate_policy_expr_refs(left, policy_idx, path, input_map, bound_names, errors);
+            validate_policy_expr_refs(right, policy_idx, path, input_map, bound_names, errors);
+        }
     }
 }
 
@@ -1271,6 +1528,16 @@ fn validate_policy_expr_semantics(
                     }
                     let arg_ty =
                         policy_expr_type(&args[0], trigger_capability, bound_names, input_map);
+                    // §3.4: numeric equality is forbidden — use ordering predicates instead.
+                    if receiver_ty.as_deref() == Some("number")
+                        || arg_ty.as_deref() == Some("number")
+                    {
+                        errors.push(
+                            format!("policies[{}].{}", policy_idx, path),
+                            "eq() does not support number operands; use a compare predicate (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
+                        );
+                        return;
+                    }
                     // Plan §5: Path.eq(Path/string) allowed; string.eq(string) allowed;
                     // string.eq(Path) and all other combinations (bool, unknown, etc.) rejected.
                     let compatible = match (receiver_ty.as_deref(), arg_ty.as_deref()) {
@@ -1426,6 +1693,84 @@ fn validate_policy_expr_semantics(
             }
         }
         Expr::Ref { .. } | Expr::Literal { .. } => {}
+        Expr::Compare { op, left, right } => {
+            validate_policy_expr_semantics(
+                left,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            validate_policy_expr_semantics(
+                right,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            let valid_ops = ["gt", "gte", "lt", "lte"];
+            if !valid_ops.contains(&op.as_str()) {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    format!(
+                        "unknown compare op '{}'; expected one of gt, gte, lt, lte",
+                        op
+                    ),
+                );
+            }
+            // Both operands must be number
+            let left_ty = policy_expr_type(left, trigger_capability, bound_names, input_map);
+            let right_ty = policy_expr_type(right, trigger_capability, bound_names, input_map);
+            if left_ty.as_deref() != Some("number") || right_ty.as_deref() != Some("number") {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    "compare requires number operands".into(),
+                );
+            }
+        }
+        Expr::BinOp { op, left, right } => {
+            validate_policy_expr_semantics(
+                left,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            validate_policy_expr_semantics(
+                right,
+                policy_idx,
+                path,
+                trigger_capability,
+                bound_names,
+                input_map,
+                errors,
+            );
+            let valid_ops = ["add", "sub", "mul", "div"];
+            if !valid_ops.contains(&op.as_str()) {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    format!(
+                        "unknown binop op '{}'; expected one of add, sub, mul, div",
+                        op
+                    ),
+                );
+            }
+            // Both operands must be number
+            let left_ty = policy_expr_type(left, trigger_capability, bound_names, input_map);
+            let right_ty = policy_expr_type(right, trigger_capability, bound_names, input_map);
+            if left_ty.as_deref() != Some("number") || right_ty.as_deref() != Some("number") {
+                errors.push(
+                    format!("policies[{}].{}", policy_idx, path),
+                    "binop requires number operands".into(),
+                );
+            }
+        }
     }
 }
 
@@ -1438,6 +1783,8 @@ fn policy_expr_type(
 ) -> Option<String> {
     match expr {
         Expr::Not { .. } | Expr::And { .. } | Expr::Or { .. } => Some("bool".to_string()),
+        Expr::Compare { .. } => Some("bool".to_string()),
+        Expr::BinOp { .. } => Some("number".to_string()),
         Expr::MethodCall { .. } => Some("bool".to_string()),
         Expr::Ref { r#ref } => match r#ref {
             Ref::Input { name } => input_map.get(name).map(|s| s.to_string()),

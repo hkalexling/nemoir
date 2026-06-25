@@ -173,8 +173,7 @@ var STORAGE_KEY = 'nemoir_positions_' + encodeURIComponent(WF_META.id + '_' + WF
 
 var edgeStyleByReason = {{
   'fallthrough': {{ color: '#888', style: 'solid' }},
-  'output_branch_true': {{ color: '#28a745', style: 'solid' }},
-  'output_branch_false': {{ color: '#dc3545', style: 'solid' }},
+  'explicit_transition': {{ color: '#28a745', style: 'solid' }},
   'next_stage_required_input_available': {{ color: '#4a90d9', style: 'solid' }},
   'skip_next_stage_required_input_missing': {{ color: '#6c757d', style: 'dashed' }},
   'backward_ref_loop': {{ color: '#8e44ad', style: 'solid' }}

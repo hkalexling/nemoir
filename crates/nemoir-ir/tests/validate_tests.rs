@@ -1449,6 +1449,49 @@ fn policy_contains_number_receiver_rejected() {
     assert_invalid(&ir, "is not supported on this receiver type");
 }
 
+#[test]
+fn policy_eq_number_operand_rejected() {
+    // §3.4 gate: eq method rejects number operands (§8.1).
+    let mut ir = valid_minimal_ir();
+    ir.inputs.push(Input {
+        id: "score".into(),
+        ty: "number".into(),
+    });
+    ir.capabilities.push("os.shell".into());
+    ir.policies = vec![Policy {
+        id: "p1".into(),
+        kind: "deny".into(),
+        trigger: Trigger {
+            capability: "os.shell".into(),
+            bind: {
+                let mut b = indexmap::IndexMap::new();
+                b.insert(
+                    "command".into(),
+                    BindArg {
+                        kind: "arg".into(),
+                        name: "command".into(),
+                    },
+                );
+                b
+            },
+        },
+        requires: None,
+        condition: Some(Expr::MethodCall {
+            receiver: Box::new(Expr::Ref {
+                r#ref: Ref::Input {
+                    name: "score".into(),
+                },
+            }),
+            method: "eq".into(),
+            args: vec![Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(5)),
+            }],
+        }),
+    }];
+    assert_invalid(&ir, "does not support number operands");
+}
+
 // ---------------------------------------------------------------------------
 // StageExecution validation tests
 // ---------------------------------------------------------------------------
@@ -1462,7 +1505,11 @@ fn make_tool_stage_ir(capability: &str, args: IndexMap<String, Expr>) -> Workflo
         capability: capability.to_string(),
         args,
     };
-    if !ir.nodes[0].requires.iter().any(|c| c.capability == capability) {
+    if !ir.nodes[0]
+        .requires
+        .iter()
+        .any(|c| c.capability == capability)
+    {
         ir.nodes[0].requires.push(StageCapability {
             capability: capability.to_string(),
         });
@@ -1553,9 +1600,7 @@ fn exec_bound_ref_rejected() {
     args.insert(
         "command".into(),
         Expr::Ref {
-            r#ref: Ref::Bound {
-                name: "cmd".into(),
-            },
+            r#ref: Ref::Bound { name: "cmd".into() },
         },
     );
     let ir = make_tool_stage_ir("os.shell", args);
@@ -1590,4 +1635,371 @@ fn exec_valid_tool_stage_accepted() {
     );
     let ir = make_tool_stage_ir("os.shell", args);
     assert_valid(&ir);
+}
+
+// ---------------------------------------------------------------------------
+// Extension 4 — numeric guard / expression validation
+// ---------------------------------------------------------------------------
+
+fn make_guard_if_ir(cond: Expr) -> WorkflowIr {
+    WorkflowIr {
+        ir_version: "0.1".into(),
+        kind: "workflow_ir".into(),
+        source: Source {
+            frontend: "test".into(),
+            file: "test.nemo".into(),
+        },
+        workflow: Workflow {
+            id: "G".into(),
+            entry: "A".into(),
+            exits: vec!["B".into()],
+            transition_semantics: TransitionSemantics {
+                selection: "first_match_by_priority".into(),
+                no_match: "error_unless_exit".into(),
+            },
+        },
+        inputs: vec![],
+        capabilities: vec![],
+        policies: vec![],
+        nodes: vec![
+            Node {
+                id: "A".into(),
+                annotations: vec!["entry".into()],
+                prompt: "a".into(),
+                reads: vec![],
+                writes: vec![Write {
+                    name: "x".into(),
+                    ty: "number".into(),
+                    optional: false,
+                }],
+                requires: vec![],
+                transitions: vec![Transition {
+                    to: "B".into(),
+                    priority: 0,
+                    reason: "t".into(),
+                    guard: Guard::If {
+                        cond: Box::new(cond),
+                    },
+                }],
+                execution: StageExecution::Model,
+            },
+            Node {
+                id: "B".into(),
+                annotations: vec!["exit".into()],
+                prompt: "b".into(),
+                reads: vec![],
+                writes: vec![],
+                requires: vec![],
+                transitions: vec![],
+                execution: StageExecution::Model,
+            },
+        ],
+    }
+}
+
+#[test]
+fn guard_if_compare_number_operands_valid() {
+    let cond = Expr::Compare {
+        op: "gt".into(),
+        left: Box::new(Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "x".into(),
+            },
+        }),
+        right: Box::new(Expr::Literal {
+            ty: "number".into(),
+            value: serde_yaml::Value::Number(serde_yaml::Number::from(5i64)),
+        }),
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_if_compare_non_number_operands_rejected() {
+    let cond = Expr::Compare {
+        op: "gt".into(),
+        left: Box::new(Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "x".into(),
+            },
+        }),
+        right: Box::new(Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("hello".into()),
+        }),
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_invalid(&ir, "number operands");
+}
+
+#[test]
+fn guard_if_compare_invalid_op_rejected() {
+    let cond = Expr::Compare {
+        op: "eq".into(),
+        left: Box::new(Expr::Literal {
+            ty: "number".into(),
+            value: serde_yaml::Value::Number(serde_yaml::Number::from(1i64)),
+        }),
+        right: Box::new(Expr::Literal {
+            ty: "number".into(),
+            value: serde_yaml::Value::Number(serde_yaml::Number::from(2i64)),
+        }),
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_invalid(&ir, "unknown compare op");
+}
+
+#[test]
+fn guard_if_binop_non_number_operands_rejected() {
+    let cond = Expr::BinOp {
+        op: "add".into(),
+        left: Box::new(Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("a".into()),
+        }),
+        right: Box::new(Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("b".into()),
+        }),
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_invalid(&ir, "number operands");
+}
+
+#[test]
+fn guard_if_non_bool_cond_rejected() {
+    let cond = Expr::Literal {
+        ty: "string".into(),
+        value: serde_yaml::Value::String("hi".into()),
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_invalid(&ir, "Guard::If condition must be bool");
+}
+
+#[test]
+fn guard_eq_number_operands_rejected() {
+    let left = Expr::Literal {
+        ty: "number".into(),
+        value: serde_yaml::Value::Number(serde_yaml::Number::from(1i64)),
+    };
+    let right = Expr::Literal {
+        ty: "number".into(),
+        value: serde_yaml::Value::Number(serde_yaml::Number::from(1i64)),
+    };
+    let guard = Guard::Eq { left, right };
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].transitions[0].guard = guard;
+    assert_invalid(&ir, "Guard::Eq does not support number operands");
+}
+
+// ---------------------------------------------------------------------------
+// Extension 4 regression: Guard::If And/Or operand type checking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guard_if_and_non_bool_operand_rejected() {
+    // And with a number ref operand (not bool) → rejected.
+    let cond = Expr::And {
+        exprs: vec![
+            Expr::Compare {
+                op: "gt".into(),
+                left: Box::new(Expr::Ref {
+                    r#ref: Ref::NodeOutput {
+                        node: "A".into(),
+                        field: "x".into(),
+                    },
+                }),
+                right: Box::new(Expr::Literal {
+                    ty: "number".into(),
+                    value: serde_yaml::Value::Number(serde_yaml::Number::from(5i64)),
+                }),
+            },
+            // second operand is a bare number ref, not bool
+            Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "A".into(),
+                    field: "x".into(),
+                },
+            },
+        ],
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_invalid(&ir, "and operand must be bool");
+}
+
+#[test]
+fn guard_if_and_bool_operands_passes() {
+    // And with two Compare operands (both bool) → valid.
+    let mk_cmp = |val: i64| -> Expr {
+        Expr::Compare {
+            op: "gt".into(),
+            left: Box::new(Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "A".into(),
+                    field: "x".into(),
+                },
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+            }),
+        }
+    };
+    let cond = Expr::And {
+        exprs: vec![mk_cmp(5), mk_cmp(0)],
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_if_or_bool_operands_passes() {
+    // Or with two Compare operands (both bool) → valid.
+    let mk_cmp = |val: i64| -> Expr {
+        Expr::Compare {
+            op: "gt".into(),
+            left: Box::new(Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "A".into(),
+                    field: "x".into(),
+                },
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+            }),
+        }
+    };
+    let cond = Expr::Or {
+        exprs: vec![mk_cmp(5), mk_cmp(0)],
+    };
+    let ir = make_guard_if_ir(cond);
+    assert_valid(&ir);
+}
+
+// ---------------------------------------------------------------------------
+// Note A: Guard::Eq path≡string compatibility (plan §4.2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guard_eq_path_string_compatible_passes() {
+    // Guard::Eq: path output vs string literal → valid (plan §4.2).
+    let mut ir = valid_minimal_ir();
+    // Change stage A's write to path type
+    ir.nodes[0].writes[0].ty = "path".into();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "out_a".into(),
+            },
+        },
+        right: Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("/tmp/foo".into()),
+        },
+    };
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_eq_string_path_compatible_passes() {
+    // Guard::Eq: string literal vs path output → valid (symmetric).
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].writes[0].ty = "path".into();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Literal {
+            ty: "string".into(),
+            value: serde_yaml::Value::String("/tmp/foo".into()),
+        },
+        right: Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: "A".into(),
+                field: "out_a".into(),
+            },
+        },
+    };
+    assert_valid(&ir);
+}
+
+// ---------------------------------------------------------------------------
+// Guard::Eq with nested Compare/BinOp — validate_guard_expr_semantics coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guard_eq_compare_with_non_number_operand_rejected() {
+    // Guard::Eq nesting Compare(string, number) — operands not both number.
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].writes[0].ty = "bool".into();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Compare {
+            op: "gt".into(),
+            left: Box::new(Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("hello".into()),
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(5i64)),
+            }),
+        },
+        right: Expr::Literal {
+            ty: "bool".into(),
+            value: serde_yaml::Value::Bool(true),
+        },
+    };
+    assert_invalid(&ir, "compare requires number operands");
+}
+
+#[test]
+fn guard_eq_compare_with_valid_number_operands_passes() {
+    // Guard::Eq nesting Compare(number, number) — both operands are number, valid.
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].writes[0].ty = "bool".into();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::Compare {
+            op: "gte".into(),
+            left: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(10i64)),
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(5i64)),
+            }),
+        },
+        right: Expr::Literal {
+            ty: "bool".into(),
+            value: serde_yaml::Value::Bool(true),
+        },
+    };
+    assert_valid(&ir);
+}
+
+#[test]
+fn guard_eq_binop_with_non_number_operand_rejected() {
+    // Guard::Eq nesting BinOp(add, string, number) — operands not both number.
+    let mut ir = valid_minimal_ir();
+    ir.nodes[0].writes[0].ty = "number".into();
+    ir.nodes[0].transitions[0].guard = Guard::Eq {
+        left: Expr::BinOp {
+            op: "add".into(),
+            left: Box::new(Expr::Literal {
+                ty: "string".into(),
+                value: serde_yaml::Value::String("x".into()),
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(3i64)),
+            }),
+        },
+        right: Expr::Literal {
+            ty: "number".into(),
+            value: serde_yaml::Value::Number(serde_yaml::Number::from(7i64)),
+        },
+    };
+    assert_invalid(&ir, "requires number operands");
 }

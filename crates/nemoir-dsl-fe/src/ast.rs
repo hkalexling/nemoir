@@ -42,6 +42,7 @@ pub enum BaseType {
     String,
     Bool,
     Path,
+    Number,
     Unknown,
 }
 
@@ -51,6 +52,7 @@ impl BaseType {
             BaseType::String => "string",
             BaseType::Bool => "bool",
             BaseType::Path => "path",
+            BaseType::Number => "number",
             BaseType::Unknown => "unknown",
         }
     }
@@ -60,6 +62,7 @@ impl BaseType {
             "string" => BaseType::String,
             "bool" => BaseType::Bool,
             "path" => BaseType::Path,
+            "number" => BaseType::Number,
             _ => BaseType::Unknown,
         }
     }
@@ -122,6 +125,16 @@ pub enum PolicyExpr {
     Not {
         expr: Box<PolicyExpr>,
     },
+    Compare {
+        op: String,
+        left: Box<PolicyExpr>,
+        right: Box<PolicyExpr>,
+    },
+    BinOp {
+        op: String,
+        left: Box<PolicyExpr>,
+        right: Box<PolicyExpr>,
+    },
     MethodCall {
         receiver: Ident,
         method: Ident,
@@ -132,13 +145,20 @@ pub enum PolicyExpr {
         options: Vec<PolicyExprValue>,
     },
     Ref(Ident),
+    Number(Spanned<f64>),
+    NodeRef {
+        stage: Ident,
+        field: Ident,
+        span: Span,
+    },
 }
 
-/// A value in a policy expression: either a variable reference or a string literal.
+/// A value in a policy expression: either a variable reference, a string literal, or a number literal.
 #[derive(Debug, Clone)]
 pub enum PolicyExprValue {
     Ref(Ident),
     String(Spanned<String>),
+    Number(Spanned<f64>),
 }
 
 #[derive(Debug, Clone)]
@@ -186,12 +206,20 @@ pub struct OutputField {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExplicitTransition {
+    pub cond: Option<PolicyExpr>,
+    pub target: Ident,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum StageBodyItem {
     Prompt(Spanned<String>),
     Input(Vec<StageInputRef>),
     Output(Vec<OutputField>),
     Requires(Vec<Ident>),
     Exec(ExecDecl),
+    Transition(Vec<ExplicitTransition>),
 }
 
 #[derive(Debug, Clone)]
@@ -228,4 +256,24 @@ pub struct WorkflowAst {
     pub inputs: Vec<InputDecl>,
     pub policies: Vec<PolicyDecl>,
     pub stages: Vec<StageDecl>,
+}
+
+/// Translate a raw symbol operator from the DSL grammar into the canonical
+/// named operator used in IR `Expr::Compare` / `Expr::BinOp`.
+///
+/// Plan §4.1: IR `op ∈ gt|gte|lt|lte` and `op ∈ add|sub|mul|div`.
+/// The parser emits raw symbols (`>`, `>=`, `+`, `-`, ...); this function
+/// translates them at the lowering boundary so the IR is always canonical.
+pub fn op_symbol_to_name(sym: &str) -> &str {
+    match sym {
+        ">" => "gt",
+        ">=" => "gte",
+        "<" => "lt",
+        "<=" => "lte",
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        "/" => "div",
+        other => other, // pass through already-named ops
+    }
 }

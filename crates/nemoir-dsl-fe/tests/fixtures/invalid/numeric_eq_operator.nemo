@@ -1,0 +1,15 @@
+workflow NumericEq {
+  input {
+    eps: number
+  }
+  stage@entry A {
+    prompt: "start"
+    output: {
+      score: number?
+    }
+    transition if score == eps => B
+  }
+  stage@exit B {
+    prompt: "done"
+  }
+}

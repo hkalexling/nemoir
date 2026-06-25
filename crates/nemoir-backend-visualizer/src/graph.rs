@@ -155,6 +155,9 @@ fn guard_summary(g: &Guard) -> String {
             let r = expr_summary(right);
             format!("{} == {}", l, r)
         }
+        Guard::If { cond } => {
+            format!("if {}", expr_summary(cond))
+        }
     }
 }
 
@@ -213,6 +216,16 @@ fn expr_summary(e: &Expr) -> String {
         Expr::Or { exprs } => {
             let parts: Vec<String> = exprs.iter().map(expr_summary).collect();
             format!("({})", parts.join(" or "))
+        }
+        Expr::Compare { op, left, right } => {
+            let l = expr_summary(left);
+            let r = expr_summary(right);
+            format!("{} {} {}", l, op, r)
+        }
+        Expr::BinOp { op, left, right } => {
+            let l = expr_summary(left);
+            let r = expr_summary(right);
+            format!("{} {} {}", l, op, r)
         }
     }
 }

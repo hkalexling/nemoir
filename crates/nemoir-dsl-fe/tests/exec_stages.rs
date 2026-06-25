@@ -130,7 +130,10 @@ fn lower_exec_user_confirm_fixture() {
 
     let confirm = find_node(&ir, "Confirm");
     assert_eq!(confirm.prompt, ""); // deterministic, prompt omitted
-    assert!(confirm.requires.iter().any(|c| c.capability == "user.confirm"));
+    assert!(confirm
+        .requires
+        .iter()
+        .any(|c| c.capability == "user.confirm"));
 
     match &confirm.execution {
         StageExecution::Tool { capability, args } => {
@@ -156,7 +159,10 @@ fn lower_exec_with_prompt_fixture() {
 
     let run = find_node(&ir, "Run");
     // Deterministic stage with a prompt — prompt is documentation-only, not empty.
-    assert_eq!(run.prompt, "This prompt is documentation-only for a deterministic stage");
+    assert_eq!(
+        run.prompt,
+        "This prompt is documentation-only for a deterministic stage"
+    );
     assert!(run.requires.iter().any(|c| c.capability == "os.shell"));
 
     match &run.execution {

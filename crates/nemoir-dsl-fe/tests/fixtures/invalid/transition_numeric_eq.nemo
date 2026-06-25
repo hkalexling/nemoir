@@ -1,0 +1,13 @@
+workflow TransitionNumericEq {
+  stage@entry A {
+    prompt: "start"
+    output: {
+      score: number?
+    }
+    // Numeric `eq()` in a transition guard is not supported (plan §3.4).
+    transition if score.eq(1) => B
+  }
+  stage@exit B {
+    prompt: "done"
+  }
+}

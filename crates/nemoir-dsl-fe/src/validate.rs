@@ -484,7 +484,10 @@ fn validate_policy_expr(
                             }
                         }
                         // Plan §5: bool and unknown receiver types are unsupported.
-                        Some(BaseType::Bool) | Some(BaseType::Unknown) | None => {
+                        Some(BaseType::Bool)
+                        | Some(BaseType::Number)
+                        | Some(BaseType::Unknown)
+                        | None => {
                             return Err(Diagnostic::TypeError(TypeError {
                                 message: format!(
                                     "contains() is not supported on receiver type {:?}",
@@ -511,6 +514,14 @@ fn validate_policy_expr(
                         input_types,
                         trigger_capability,
                     );
+                    // §3.4: numeric equality is forbidden — use ordering predicates instead.
+                    if recv_ty == Some(BaseType::Number) || arg_ty == Some(BaseType::Number) {
+                        return Err(Diagnostic::TypeError(TypeError {
+                            message: "eq() does not support number operands; use a compare predicate (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
+                            filename: filename.to_string(),
+                            label: None,
+                        }));
+                    }
                     // Plan §5: Path.eq(Path/string) allowed; string.eq(string) allowed;
                     // string.eq(Path) and all other combinations (bool, unknown, etc.) rejected.
                     let compatible = match (recv_ty, arg_ty) {
@@ -654,6 +665,129 @@ fn validate_policy_expr(
                 }));
             }
         }
+        PolicyExpr::Compare { op, left, right } => {
+            let normalized = op_symbol_to_name(op);
+            if !["gt", "gte", "lt", "lte"].contains(&normalized) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: format!(
+                        "unknown compare op '{}'; expected one of gt, gte, lt, lte",
+                        normalized
+                    ),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            validate_policy_expr(
+                left,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+                filename,
+            )?;
+            validate_policy_expr(
+                right,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+                filename,
+            )?;
+            let left_ty = type_of_policy_expr(
+                left,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            let right_ty = type_of_policy_expr(
+                right,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            if left_ty != Some(BaseType::Number) || right_ty != Some(BaseType::Number) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "compare requires number operands".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+        }
+        PolicyExpr::BinOp { op, left, right } => {
+            let normalized = op_symbol_to_name(op);
+            if !["add", "sub", "mul", "div"].contains(&normalized) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: format!(
+                        "unknown binop '{}'; expected one of add, sub, mul, div",
+                        normalized
+                    ),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            validate_policy_expr(
+                left,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+                filename,
+            )?;
+            validate_policy_expr(
+                right,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+                filename,
+            )?;
+            let left_ty = type_of_policy_expr(
+                left,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            let right_ty = type_of_policy_expr(
+                right,
+                input_names,
+                bound_vars,
+                input_types,
+                trigger_capability,
+            );
+            if left_ty != Some(BaseType::Number) || right_ty != Some(BaseType::Number) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "binop requires number operands".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+        }
+        PolicyExpr::Number(_) => {
+            // Number literals are always valid (type number)
+        }
+        PolicyExpr::NodeRef {
+            stage,
+            field,
+            span: _,
+        } => {
+            // NodeRef (Stage.field) is valid only in transition conditions, not policy conditions.
+            return Err(Diagnostic::NameError(NameError {
+                message: format!(
+                    "node reference `{}.{}` is not allowed in policy conditions (policies can only reference workflow inputs and bound variables)",
+                    stage.text, field.text
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    stage.span.start,
+                    field.span.end,
+                    format!("`{}.{}` is a stage output reference", stage.text, field.text),
+                )),
+                help: None,
+            }));
+        }
     }
     Ok(())
 }
@@ -707,6 +841,7 @@ fn policy_expr_value_type(
             }
         }
         PolicyExprValue::String(_) => Some(BaseType::String),
+        PolicyExprValue::Number(_) => Some(BaseType::Number),
     }
 }
 
@@ -743,6 +878,16 @@ fn type_of_policy_expr(
         PolicyExpr::Not { .. } | PolicyExpr::Or { .. } | PolicyExpr::And { .. } => {
             Some(BaseType::Bool)
         }
+        PolicyExpr::Compare { .. } => Some(BaseType::Bool),
+        PolicyExpr::BinOp { .. } => Some(BaseType::Number),
+        PolicyExpr::Number(_) => Some(BaseType::Number),
+        PolicyExpr::NodeRef { .. } => {
+            // Look up the stage output type from the ResolvedWorkflow's stages.
+            // At this point we don't have access to rw directly — the return type
+            // is determined during transition-condition validation (lower_transition_cond).
+            // For now, return None — the validator will catch type mismatches.
+            None
+        }
         PolicyExpr::In { .. } => Some(BaseType::Bool),
         PolicyExpr::MethodCall { method, .. } => match method.text.as_str() {
             "contains" | "eq" | "starts_with" => Some(BaseType::Bool),
@@ -774,6 +919,7 @@ fn policy_expr_type_name(ty: Option<BaseType>) -> &'static str {
         Some(BaseType::Bool) => "bool",
         Some(BaseType::String) => "string",
         Some(BaseType::Path) => "path",
+        Some(BaseType::Number) => "number",
         Some(BaseType::Unknown) => "unknown",
         None => "unknown",
     }
@@ -783,9 +929,14 @@ fn policy_expr_first_span(expr: &PolicyExpr) -> (usize, usize) {
     match expr {
         PolicyExpr::Not { expr } => policy_expr_first_span(expr),
         PolicyExpr::Or { exprs } | PolicyExpr::And { exprs } => policy_expr_first_span(&exprs[0]),
+        PolicyExpr::Compare { left, .. } | PolicyExpr::BinOp { left, .. } => {
+            policy_expr_first_span(left)
+        }
         PolicyExpr::MethodCall { receiver, .. } => (receiver.span.start, receiver.span.end),
         PolicyExpr::In { value, .. } => (value.span.start, value.span.end),
         PolicyExpr::Ref(id) => (id.span.start, id.span.end),
+        PolicyExpr::Number(n) => (n.span.start, n.span.end),
+        PolicyExpr::NodeRef { span, .. } => (span.start, span.end),
     }
 }
 
@@ -853,47 +1004,66 @@ fn infer_stage_transitions(
         return Ok(vec![]);
     }
 
-    // Rule 1: Bool branch
-    for output in &stage.outputs {
-        if let Some(branches) = &output.branches {
-            let (guard_node, guard_field) = (stage.name.text.clone(), output.name.text.clone());
-            return Ok(vec![
-                Transition {
-                    to: branches.true_target.text.clone(),
-                    priority: 0,
-                    reason: "output_branch_true".into(),
-                    guard: Guard::Eq {
-                        left: Expr::Ref {
-                            r#ref: Ref::NodeOutput {
-                                node: guard_node.clone(),
-                                field: guard_field.clone(),
-                            },
-                        },
-                        right: Expr::Literal {
-                            ty: "bool".to_string(),
-                            value: serde_yaml::Value::Bool(true),
-                        },
-                    },
-                },
-                Transition {
-                    to: branches.false_target.text.clone(),
-                    priority: 1,
-                    reason: "output_branch_false".into(),
-                    guard: Guard::Eq {
-                        left: Expr::Ref {
-                            r#ref: Ref::NodeOutput {
-                                node: guard_node.clone(),
-                                field: guard_field.clone(),
-                            },
-                        },
-                        right: Expr::Literal {
-                            ty: "bool".to_string(),
-                            value: serde_yaml::Value::Bool(false),
-                        },
-                    },
-                },
-            ]);
+    // If the stage has explicit transitions (including desugared bool-branches),
+    // lower them and skip the inference rules (Rules 2–4).
+    if !stage.transitions.is_empty() {
+        // Plan §3.2: "transition else emits Guard::Always at the lowest priority"
+        // and "the single else fallback." Pin else to lowest priority regardless
+        // of source position; reject multiple else transitions.
+        let else_count = stage
+            .transitions
+            .iter()
+            .filter(|t| t.cond.is_none())
+            .count();
+        if else_count > 1 {
+            return Err(Diagnostic::TransitionError(TransitionError {
+                message: format!(
+                    "stage `{}` has {} `transition else` declarations; at most one is supported",
+                    stage.name.text, else_count
+                ),
+                filename: filename.to_string(),
+                label: Some((
+                    stage.name.span.start,
+                    stage.name.span.end,
+                    "multiple else transitions".into(),
+                )),
+                help: Some("each stage may have at most one `transition else` fallback".into()),
+            }));
         }
+
+        let mut transitions = Vec::new();
+        let mut priority = 0u32;
+
+        // First pass: conditional transitions in source order (priorities 0, 1, 2, …).
+        for t in &stage.transitions {
+            if t.cond.is_some() {
+                let guard = lower_transition_cond(t.cond.as_ref(), stage, rw);
+                transitions.push(Transition {
+                    to: t.target.text.clone(),
+                    priority,
+                    reason: "explicit_transition".into(),
+                    guard,
+                });
+                priority += 1;
+            }
+        }
+
+        // Second pass: the single else fallback at lowest priority.
+        for t in &stage.transitions {
+            if t.cond.is_none() {
+                let guard = lower_transition_cond(t.cond.as_ref(), stage, rw);
+                transitions.push(Transition {
+                    to: t.target.text.clone(),
+                    priority,
+                    reason: "explicit_transition".into(),
+                    guard,
+                });
+            }
+        }
+
+        // Validate transition conditions are bool-typed
+        validate_transition_conditions(stage, rw, filename)?;
+        return Ok(transitions);
     }
 
     // Rule 2: Backward-reference loop
@@ -1056,6 +1226,485 @@ fn infer_stage_transitions(
             help: Some("add a bool branch output or make this an exit stage".into()),
         }))
     }
+}
+
+/// Lower a transition condition expression to an IR expression, using guard-side
+/// bare-ident classification: bare `X` in stage `S` → NodeOutput{S,X} if `S`
+/// writes `X`, else Input{X}; `Stage.field` (NodeRef) → NodeOutput{Stage,field}.
+fn lower_transition_cond(
+    cond: Option<&PolicyExpr>,
+    stage: &crate::resolve::ResolvedStage,
+    rw: &ResolvedWorkflow,
+) -> Guard {
+    let Some(cond) = cond else {
+        return Guard::Always; // transition else => …
+    };
+    let stage_name = &stage.name.text;
+    let writes_map: std::collections::HashMap<&str, ()> = stage
+        .outputs
+        .iter()
+        .map(|o| (o.name.text.as_str(), ()))
+        .collect();
+    let ir_cond = lower_transition_expr(cond, stage_name, &writes_map, rw);
+    Guard::If {
+        cond: Box::new(ir_cond),
+    }
+}
+
+fn lower_transition_expr(
+    expr: &PolicyExpr,
+    stage_name: &str,
+    writes_map: &std::collections::HashMap<&str, ()>,
+    _rw: &ResolvedWorkflow,
+) -> Expr {
+    let lower = |e: &PolicyExpr| -> Expr { lower_transition_expr(e, stage_name, writes_map, _rw) };
+    match expr {
+        PolicyExpr::Ref(id) => {
+            if writes_map.contains_key(id.text.as_str()) {
+                Expr::Ref {
+                    r#ref: Ref::NodeOutput {
+                        node: stage_name.to_string(),
+                        field: id.text.clone(),
+                    },
+                }
+            } else {
+                Expr::Ref {
+                    r#ref: Ref::Input {
+                        name: id.text.clone(),
+                    },
+                }
+            }
+        }
+        PolicyExpr::Not { expr } => Expr::Not {
+            expr: Box::new(lower(expr)),
+        },
+        PolicyExpr::Or { exprs } => Expr::Or {
+            exprs: exprs.iter().map(&lower).collect(),
+        },
+        PolicyExpr::And { exprs } => Expr::And {
+            exprs: exprs.iter().map(&lower).collect(),
+        },
+        PolicyExpr::Compare { op, left, right } => Expr::Compare {
+            op: op_symbol_to_name(op).to_string(),
+            left: Box::new(lower(left)),
+            right: Box::new(lower(right)),
+        },
+        PolicyExpr::BinOp { op, left, right } => Expr::BinOp {
+            op: op_symbol_to_name(op).to_string(),
+            left: Box::new(lower(left)),
+            right: Box::new(lower(right)),
+        },
+        PolicyExpr::NodeRef {
+            stage: ref_stage,
+            field,
+            ..
+        } => Expr::Ref {
+            r#ref: Ref::NodeOutput {
+                node: ref_stage.text.clone(),
+                field: field.text.clone(),
+            },
+        },
+        PolicyExpr::Number(n) => Expr::Literal {
+            ty: "number".to_string(),
+            value: crate::lower::number_literal_value(n.value),
+        },
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let recv = if writes_map.contains_key(receiver.text.as_str()) {
+                Expr::Ref {
+                    r#ref: Ref::NodeOutput {
+                        node: stage_name.to_string(),
+                        field: receiver.text.clone(),
+                    },
+                }
+            } else {
+                Expr::Ref {
+                    r#ref: Ref::Input {
+                        name: receiver.text.clone(),
+                    },
+                }
+            };
+            let ir_args: Vec<Expr> = args
+                .iter()
+                .map(|a| match a {
+                    PolicyExprValue::Ref(id) => {
+                        if writes_map.contains_key(id.text.as_str()) {
+                            Expr::Ref {
+                                r#ref: Ref::NodeOutput {
+                                    node: stage_name.to_string(),
+                                    field: id.text.clone(),
+                                },
+                            }
+                        } else {
+                            Expr::Ref {
+                                r#ref: Ref::Input {
+                                    name: id.text.clone(),
+                                },
+                            }
+                        }
+                    }
+                    PolicyExprValue::String(s) => Expr::Literal {
+                        ty: "string".to_string(),
+                        value: serde_yaml::Value::String(s.value.clone()),
+                    },
+                    PolicyExprValue::Number(n) => Expr::Literal {
+                        ty: "number".to_string(),
+                        value: crate::lower::number_literal_value(n.value),
+                    },
+                })
+                .collect();
+            Expr::MethodCall {
+                receiver: Box::new(recv),
+                method: method.text.clone(),
+                args: ir_args,
+            }
+        }
+        PolicyExpr::In { value, options } => {
+            let value_expr = if writes_map.contains_key(value.text.as_str()) {
+                Expr::Ref {
+                    r#ref: Ref::NodeOutput {
+                        node: stage_name.to_string(),
+                        field: value.text.clone(),
+                    },
+                }
+            } else {
+                Expr::Ref {
+                    r#ref: Ref::Input {
+                        name: value.text.clone(),
+                    },
+                }
+            };
+            let disjuncts: Vec<Expr> = options
+                .iter()
+                .map(|opt| match opt {
+                    PolicyExprValue::Ref(id) => Expr::MethodCall {
+                        receiver: Box::new(value_expr.clone()),
+                        method: "eq".to_string(),
+                        args: vec![Expr::Ref {
+                            r#ref: if writes_map.contains_key(id.text.as_str()) {
+                                Ref::NodeOutput {
+                                    node: stage_name.to_string(),
+                                    field: id.text.clone(),
+                                }
+                            } else {
+                                Ref::Input {
+                                    name: id.text.clone(),
+                                }
+                            },
+                        }],
+                    },
+                    PolicyExprValue::String(s) => Expr::MethodCall {
+                        receiver: Box::new(value_expr.clone()),
+                        method: "eq".to_string(),
+                        args: vec![Expr::Literal {
+                            ty: "string".to_string(),
+                            value: serde_yaml::Value::String(s.value.clone()),
+                        }],
+                    },
+                    PolicyExprValue::Number(n) => Expr::MethodCall {
+                        receiver: Box::new(value_expr.clone()),
+                        method: "eq".to_string(),
+                        args: vec![Expr::Literal {
+                            ty: "number".to_string(),
+                            value: crate::lower::number_literal_value(n.value),
+                        }],
+                    },
+                })
+                .collect();
+            if disjuncts.len() == 1 {
+                disjuncts.into_iter().next().unwrap()
+            } else {
+                Expr::Or { exprs: disjuncts }
+            }
+        }
+    }
+}
+
+/// Validate that all transition conditions are bool-typed and refs resolve.
+fn validate_transition_conditions(
+    stage: &crate::resolve::ResolvedStage,
+    rw: &ResolvedWorkflow,
+    filename: &str,
+) -> Result<(), Diagnostic> {
+    let input_types: HashMap<&str, BaseType> = rw
+        .inputs
+        .iter()
+        .map(|i| (i.name.text.as_str(), i.ty.base))
+        .collect();
+    let output_types: HashMap<&str, HashMap<&str, BaseType>> = rw
+        .stages
+        .iter()
+        .map(|s| {
+            let fields: HashMap<&str, BaseType> = s
+                .outputs
+                .iter()
+                .map(|o| (o.name.text.as_str(), o.ty.base))
+                .collect();
+            (s.name.text.as_str(), fields)
+        })
+        .collect();
+
+    for t in &stage.transitions {
+        let Some(ref cond) = t.cond else {
+            continue; // else → no condition to validate
+        };
+        let ty = type_of_transition_expr(cond, stage, &input_types, &output_types);
+        if ty != Some(BaseType::Bool) {
+            let (start, end) = policy_expr_first_span(cond);
+            return Err(Diagnostic::TypeError(TypeError {
+                message: format!(
+                    "transition condition must be a bool expression, but is `{}`",
+                    policy_expr_type_name(ty)
+                ),
+                filename: filename.to_string(),
+                label: Some((start, end, "this condition".into())),
+            }));
+        }
+        // Semantic check: Compare/BinOp operands must be number, ops must be valid.
+        validate_transition_expr_semantics(cond, stage, &input_types, &output_types, filename)?;
+    }
+    Ok(())
+}
+
+/// Infer the type of a transition condition expression.
+fn type_of_transition_expr(
+    expr: &PolicyExpr,
+    stage: &crate::resolve::ResolvedStage,
+    input_types: &HashMap<&str, BaseType>,
+    output_types: &HashMap<&str, HashMap<&str, BaseType>>,
+) -> Option<BaseType> {
+    match expr {
+        PolicyExpr::Not { .. } | PolicyExpr::Or { .. } | PolicyExpr::And { .. } => {
+            Some(BaseType::Bool)
+        }
+        PolicyExpr::Compare { .. } => Some(BaseType::Bool),
+        PolicyExpr::BinOp { .. } => Some(BaseType::Number),
+        PolicyExpr::Number(_) => Some(BaseType::Number),
+        PolicyExpr::In { .. } => Some(BaseType::Bool),
+        PolicyExpr::MethodCall { method, .. } => match method.text.as_str() {
+            "contains" | "eq" | "starts_with" => Some(BaseType::Bool),
+            _ => None,
+        },
+        PolicyExpr::Ref(id) => {
+            // Bare ident: check current-stage outputs first, then inputs
+            let writes_map: std::collections::HashMap<&str, ()> = stage
+                .outputs
+                .iter()
+                .map(|o| (o.name.text.as_str(), ()))
+                .collect();
+            if writes_map.contains_key(id.text.as_str()) {
+                stage
+                    .outputs
+                    .iter()
+                    .find(|o| o.name.text == id.text)
+                    .map(|o| o.ty.base)
+            } else {
+                input_types.get(id.text.as_str()).copied()
+            }
+        }
+        PolicyExpr::NodeRef {
+            stage: ref_stage,
+            field,
+            ..
+        } => output_types
+            .get(ref_stage.text.as_str())
+            .and_then(|fields| fields.get(field.text.as_str()))
+            .copied(),
+    }
+}
+
+/// Resolve a bare ident's type under guard-side classification:
+/// current-stage output → its type, else workflow input → its type, else None.
+fn transition_ident_type(
+    id: &Ident,
+    stage: &crate::resolve::ResolvedStage,
+    input_types: &HashMap<&str, BaseType>,
+    _output_types: &HashMap<&str, HashMap<&str, BaseType>>,
+) -> Option<BaseType> {
+    if let Some(o) = stage.outputs.iter().find(|o| o.name.text == id.text) {
+        return Some(o.ty.base);
+    }
+    input_types.get(id.text.as_str()).copied()
+}
+
+/// Resolve a PolicyExprValue's type under guard-side classification.
+fn transition_value_type(
+    val: &PolicyExprValue,
+    stage: &crate::resolve::ResolvedStage,
+    input_types: &HashMap<&str, BaseType>,
+    output_types: &HashMap<&str, HashMap<&str, BaseType>>,
+) -> Option<BaseType> {
+    match val {
+        PolicyExprValue::Ref(id) => transition_ident_type(id, stage, input_types, output_types),
+        PolicyExprValue::String(_) => Some(BaseType::String),
+        PolicyExprValue::Number(_) => Some(BaseType::Number),
+    }
+}
+
+/// Semantic validation for transition condition expressions.
+/// Ensures Compare/BinOp operands are number-typed and ops are valid
+/// (plan §4.2: "compared expressions are numeric where required").
+fn validate_transition_expr_semantics(
+    expr: &PolicyExpr,
+    stage: &crate::resolve::ResolvedStage,
+    input_types: &HashMap<&str, BaseType>,
+    output_types: &HashMap<&str, HashMap<&str, BaseType>>,
+    filename: &str,
+) -> Result<(), Diagnostic> {
+    match expr {
+        PolicyExpr::Compare { op, left, right } => {
+            let normalized = op_symbol_to_name(op);
+            if !["gt", "gte", "lt", "lte"].contains(&normalized) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: format!(
+                        "unknown compare op '{}'; expected one of gt, gte, lt, lte",
+                        normalized
+                    ),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            validate_transition_expr_semantics(left, stage, input_types, output_types, filename)?;
+            validate_transition_expr_semantics(right, stage, input_types, output_types, filename)?;
+            let lt = type_of_transition_expr(left, stage, input_types, output_types);
+            let rt = type_of_transition_expr(right, stage, input_types, output_types);
+            if lt != Some(BaseType::Number) || rt != Some(BaseType::Number) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "compare requires number operands".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+        }
+        PolicyExpr::BinOp { op, left, right } => {
+            let normalized = op_symbol_to_name(op);
+            if !["add", "sub", "mul", "div"].contains(&normalized) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: format!(
+                        "unknown binop '{}'; expected one of add, sub, mul, div",
+                        normalized
+                    ),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+            validate_transition_expr_semantics(left, stage, input_types, output_types, filename)?;
+            validate_transition_expr_semantics(right, stage, input_types, output_types, filename)?;
+            let lt = type_of_transition_expr(left, stage, input_types, output_types);
+            let rt = type_of_transition_expr(right, stage, input_types, output_types);
+            if lt != Some(BaseType::Number) || rt != Some(BaseType::Number) {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "binop requires number operands".into(),
+                    filename: filename.to_string(),
+                    label: None,
+                }));
+            }
+        }
+        PolicyExpr::Not { expr } => {
+            validate_transition_expr_semantics(expr, stage, input_types, output_types, filename)?;
+            // Plan §5: not requires a bool operand.
+            let inner_ty = type_of_transition_expr(expr, stage, input_types, output_types);
+            if !matches!(inner_ty, Some(BaseType::Bool)) {
+                let (span_start, span_end) = policy_expr_first_span(expr);
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: format!(
+                        "`not` requires a bool expression, but got `{}`",
+                        policy_expr_type_name(inner_ty)
+                    ),
+                    filename: filename.to_string(),
+                    label: Some((span_start, span_end, "this expression".into())),
+                }));
+            }
+        }
+        PolicyExpr::And { exprs } | PolicyExpr::Or { exprs } => {
+            for e in exprs {
+                validate_transition_expr_semantics(e, stage, input_types, output_types, filename)?;
+                // Plan §5: and/or are boolean combinators; every operand must be bool.
+                let op_ty = type_of_transition_expr(e, stage, input_types, output_types);
+                if !matches!(op_ty, Some(BaseType::Bool)) {
+                    let (span_start, span_end) = policy_expr_first_span(e);
+                    return Err(Diagnostic::TypeError(TypeError {
+                        message: format!(
+                            "and/or requires bool operands, but got `{}`",
+                            policy_expr_type_name(op_ty)
+                        ),
+                        filename: filename.to_string(),
+                        label: Some((span_start, span_end, "this operand".into())),
+                    }));
+                }
+            }
+        }
+        PolicyExpr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            // Method calls are not supported in transition guard conditions:
+            // the IR's guard-side `expr_type` returns `None` for `MethodCall`
+            // (plan §4.2 left it unchanged), so method calls cannot be typed
+            // as bool in guard conditions. Reject at the DSL level with a
+            // clear message rather than emitting invalid IR.
+            let recv_ty = transition_ident_type(receiver, stage, input_types, output_types);
+            // For `eq` with numeric operands, give the §3.4 numeric-equality message.
+            let numeric_eq = method.text == "eq"
+                && args.len() == 1
+                && (recv_ty == Some(BaseType::Number)
+                    || transition_value_type(&args[0], stage, input_types, output_types)
+                        == Some(BaseType::Number));
+            if numeric_eq {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "eq() does not support number operands; use a compare predicate (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
+                    filename: filename.to_string(),
+                    label: Some((
+                        receiver.span.start,
+                        receiver.span.end,
+                        "numeric equality not supported".into(),
+                    )),
+                }));
+            }
+            return Err(Diagnostic::TypeError(TypeError {
+                message: "method calls are not supported in transition conditions; use a comparison (>, >=, <, <=), arithmetic (+ - * /), or boolean combinators (and/or/not)".into(),
+                filename: filename.to_string(),
+                label: Some((
+                    receiver.span.start,
+                    receiver.span.end,
+                    "method call not supported here".into(),
+                )),
+            }));
+        }
+        PolicyExpr::In { value, options } => {
+            // `in [...]` is also not supported in transition guard conditions
+            // (same rationale as method calls — IR expr_type returns None for
+            // the lowered Or-of-eq IR form).
+            let val_ty = transition_ident_type(value, stage, input_types, output_types);
+            let any_numeric = val_ty == Some(BaseType::Number)
+                || options.iter().any(|o| {
+                    transition_value_type(o, stage, input_types, output_types)
+                        == Some(BaseType::Number)
+                });
+            if any_numeric {
+                return Err(Diagnostic::TypeError(TypeError {
+                    message: "`in [...]` does not support number operands; use a compare predicate (>, >=, <, <=) or `score - x > eps` for near-equality".into(),
+                    filename: filename.to_string(),
+                    label: Some((value.span.start, value.span.end, "numeric in not supported".into())),
+                }));
+            }
+            return Err(Diagnostic::TypeError(TypeError {
+                message: "`in [...]` is not supported in transition conditions; use a comparison or boolean combinators".into(),
+                filename: filename.to_string(),
+                label: Some((
+                    value.span.start,
+                    value.span.end,
+                    "`in [...]` not supported here".into(),
+                )),
+            }));
+        }
+        PolicyExpr::Ref(_) | PolicyExpr::Number(_) | PolicyExpr::NodeRef { .. } => {}
+    }
+    Ok(())
 }
 
 fn validate_graph(

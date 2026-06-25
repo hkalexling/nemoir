@@ -416,7 +416,8 @@ pub fn emit_ref(r: &Ref) -> String {
     }
 }
 
-/// `True` / `False` / integer / float / quoted string. Other variants are unsupported.
+/// `True` / `False` / integer / float / quoted string / float('inf') / float('-inf') / float('nan').
+/// Other variants are unsupported.
 pub fn emit_literal_value(value: &serde_yaml::Value) -> Result<String, PythonBackendError> {
     match value {
         serde_yaml::Value::Bool(b) => Ok(if *b { "True".into() } else { "False".into() }),
@@ -426,7 +427,16 @@ pub fn emit_literal_value(value: &serde_yaml::Value) -> Result<String, PythonBac
             } else if n.is_u64() {
                 Ok(format!("{}", n.as_u64().unwrap()))
             } else if n.is_f64() {
-                Ok(format!("{}", n.as_f64().unwrap()))
+                let f = n.as_f64().unwrap();
+                if f.is_finite() {
+                    Ok(format!("{}", f))
+                } else if f.is_nan() {
+                    Ok("float('nan')".into())
+                } else if f.is_sign_positive() {
+                    Ok("float('inf')".into())
+                } else {
+                    Ok("float('-inf')".into())
+                }
             } else {
                 Err(PythonBackendError::UnsupportedLiteral(format!("{:?}", n)))
             }
@@ -445,6 +455,7 @@ fn ir_type_as_annotation(ty: &str) -> &'static str {
         "string" => "str",
         "path" => "Path",
         "bool" => "bool",
+        "number" => "float",
         "string[]" => "list[str]",
         _ => "typing.Any",
     }
@@ -526,6 +537,18 @@ pub fn emit_expr(expr: &Expr) -> Result<String, PythonBackendError> {
             s.push(')');
             Ok(s)
         }
+        Expr::Compare { op, left, right } => Ok(format!(
+            "ExprSpec(kind=\"compare\", op={}, left={}, right={})",
+            python_string_literal(op),
+            emit_expr(left)?,
+            emit_expr(right)?
+        )),
+        Expr::BinOp { op, left, right } => Ok(format!(
+            "ExprSpec(kind=\"binop\", op={}, left={}, right={})",
+            python_string_literal(op),
+            emit_expr(left)?,
+            emit_expr(right)?
+        )),
     }
 }
 
@@ -546,6 +569,7 @@ pub fn emit_guard(guard: &Guard) -> Result<String, PythonBackendError> {
             emit_expr(left)?,
             emit_expr(right)?
         )),
+        Guard::If { cond } => Ok(format!("GuardSpec(kind=\"if\", cond={})", emit_expr(cond)?)),
     }
 }
 
@@ -732,7 +756,9 @@ pub fn emit_stage(node: &nemoir_ir::Node) -> Result<String, PythonBackendError> 
 }
 
 /// StageExecutionSpec(kind="tool", capability=..., args={...})
-pub fn emit_stage_execution(exec: &nemoir_ir::StageExecution) -> Result<String, PythonBackendError> {
+pub fn emit_stage_execution(
+    exec: &nemoir_ir::StageExecution,
+) -> Result<String, PythonBackendError> {
     match exec {
         nemoir_ir::StageExecution::Model => Ok("StageExecutionSpec()".into()),
         nemoir_ir::StageExecution::Tool { capability, args } => {
@@ -1348,7 +1374,9 @@ mod tests {
         let s = emit_stage(&node).unwrap();
         assert!(s.contains("execution=StageExecutionSpec(kind=\"tool\""));
         assert!(s.contains("capability=\"os.shell\""));
-        assert!(s.contains("args={\"command\": ExprSpec(kind=\"literal\", type=\"string\", value=\"echo hi\")}"));
+        assert!(s.contains(
+            "args={\"command\": ExprSpec(kind=\"literal\", type=\"string\", value=\"echo hi\")}"
+        ));
     }
 
     #[test]
@@ -1365,5 +1393,103 @@ mod tests {
         };
         let s = emit_stage(&node).unwrap();
         assert!(!s.contains("execution="));
+    }
+
+    // -----------------------------------------------------------------------
+    // Numeric codegen tests (Extension 4 follow-up)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn emit_expr_compare_uses_named_op() {
+        use nemoir_ir::{Expr, Ref};
+        let expr = Expr::Compare {
+            op: "gt".into(),
+            left: Box::new(Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "Judge".into(),
+                    field: "score".into(),
+                },
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(5i64)),
+            }),
+        };
+        let s = emit_expr(&expr).unwrap();
+        assert!(s.contains("kind=\"compare\""));
+        assert!(s.contains("op=\"gt\""));
+    }
+
+    #[test]
+    fn emit_expr_binop_uses_named_op() {
+        use nemoir_ir::{Expr, Ref};
+        let expr = Expr::BinOp {
+            op: "sub".into(),
+            left: Box::new(Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "A".into(),
+                    field: "score".into(),
+                },
+            }),
+            right: Box::new(Expr::Literal {
+                ty: "number".into(),
+                value: serde_yaml::Value::Number(serde_yaml::Number::from(3i64)),
+            }),
+        };
+        let s = emit_expr(&expr).unwrap();
+        assert!(s.contains("kind=\"binop\""));
+        assert!(s.contains("op=\"sub\""));
+    }
+
+    #[test]
+    fn emit_guard_if_emits_cond() {
+        use nemoir_ir::*;
+        let guard = Guard::If {
+            cond: Box::new(Expr::Ref {
+                r#ref: Ref::NodeOutput {
+                    node: "Judge".into(),
+                    field: "score".into(),
+                },
+            }),
+        };
+        let s = emit_guard(&guard).unwrap();
+        assert!(s.contains("GuardSpec(kind=\"if\""));
+        assert!(s.contains("cond=ExprSpec(kind=\"ref\""));
+    }
+
+    #[test]
+    fn ir_type_to_python_number_is_float() {
+        assert_eq!(ir_type_to_python("number"), "float");
+    }
+
+    #[test]
+    fn emit_literal_value_nonfinite_emits_float_calls() {
+        let inf_val: serde_yaml::Value =
+            serde_yaml::to_value(f64::INFINITY).expect("to_value should succeed");
+        assert!(
+            matches!(&inf_val, serde_yaml::Value::Number(_)),
+            "to_value(INFINITY) should be a Number, got {:?}",
+            inf_val
+        );
+        let s = emit_literal_value(&inf_val).unwrap();
+        assert_eq!(s, "float('inf')");
+
+        let neg_inf_val: serde_yaml::Value =
+            serde_yaml::to_value(f64::NEG_INFINITY).expect("to_value should succeed");
+        assert!(
+            matches!(&neg_inf_val, serde_yaml::Value::Number(_)),
+            "to_value(NEG_INFINITY) should be a Number"
+        );
+        let s = emit_literal_value(&neg_inf_val).unwrap();
+        assert_eq!(s, "float('-inf')");
+
+        let nan_val: serde_yaml::Value =
+            serde_yaml::to_value(f64::NAN).expect("to_value should succeed");
+        assert!(
+            matches!(&nan_val, serde_yaml::Value::Number(_)),
+            "to_value(NAN) should be a Number"
+        );
+        let s = emit_literal_value(&nan_val).unwrap();
+        assert_eq!(s, "float('nan')");
     }
 }
