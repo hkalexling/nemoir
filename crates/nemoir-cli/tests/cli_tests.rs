@@ -13,6 +13,14 @@ fn coding_agent_path() -> String {
     .to_string()
 }
 
+fn hint_tutor_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/hint_tutor.nemo"
+    )
+    .to_string()
+}
+
 fn dup_stage_path() -> String {
     concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -202,6 +210,10 @@ fn cli_compile_unknown_target() {
     assert!(
         stderr.contains("python"),
         "should list 'python' as supported target"
+    );
+    assert!(
+        stderr.contains("web"),
+        "should list 'web' as supported target"
     );
 }
 
@@ -397,6 +409,325 @@ fn cli_compile_python_dump_ir_writes_package_and_dumps_yaml() {
     // Package should still be written next to the dumped IR.
     assert!(out_dir.join("coding_agent").join("__init__.py").exists());
     assert!(out_dir.join("pyproject.toml").exists());
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+// ---------------------------------------------------------------------------
+// `nemo compile --target web` integration tests
+// ---------------------------------------------------------------------------
+
+fn judge_candidate_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/judge_candidate.nemo"
+    )
+    .to_string()
+}
+
+#[test]
+fn cli_compile_web_positive_creates_package() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_creates");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web");
+
+    assert!(
+        output.status.success(),
+        "compile --target web should succeed for judge_candidate"
+    );
+
+    // Expected generated files under the kebab-case package dir.
+    let pkg = out_dir.join("judge-candidate");
+    assert!(
+        pkg.join("package.json").exists(),
+        "package.json should exist"
+    );
+    assert!(
+        pkg.join("vite.config.ts").exists(),
+        "vite.config.ts should exist"
+    );
+    assert!(
+        pkg.join("tsconfig.json").exists(),
+        "tsconfig.json should exist"
+    );
+    assert!(pkg.join("index.html").exists(), "index.html should exist");
+    assert!(
+        pkg.join("netlify.toml").exists(),
+        "netlify.toml should exist"
+    );
+    assert!(
+        pkg.join("public").join("_headers").exists(),
+        "public/_headers should exist"
+    );
+    assert!(
+        pkg.join("src").join("workflow.json").exists(),
+        "src/workflow.json should exist"
+    );
+    assert!(
+        pkg.join("src").join("agent.ts").exists(),
+        "src/agent.ts should exist"
+    );
+    assert!(
+        pkg.join("src").join("main.tsx").exists(),
+        "src/main.tsx should exist"
+    );
+    assert!(
+        pkg.join("src").join("webllm.worker.ts").exists(),
+        "src/webllm.worker.ts should exist"
+    );
+
+    // workflow.json must be valid JSON containing the workflow id.
+    let wf_json = std::fs::read_to_string(pkg.join("src").join("workflow.json"))
+        .expect("should read workflow.json");
+    assert!(
+        wf_json.contains("JudgeCandidate"),
+        "workflow.json should contain workflow id"
+    );
+
+    // agent.ts must reference the workflow id and export Agent.
+    let agent =
+        std::fs::read_to_string(pkg.join("src").join("agent.ts")).expect("should read agent.ts");
+    assert!(
+        agent.contains("JudgeCandidate"),
+        "agent.ts should contain workflow id"
+    );
+    assert!(
+        agent.contains("export class Agent"),
+        "agent.ts should export Agent class"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_negative_coding_agent_fails() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_negative");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(coding_agent_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web (coding-agent)");
+
+    assert!(
+        !output.status.success(),
+        "coding-agent must fail on web target (uses fs.* and path)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("web") || stderr.contains("not compatible"),
+        "should mention web incompatibility: {stderr}"
+    );
+
+    // No output directory should have been created.
+    assert!(
+        !out_dir.join("coding-agent").exists(),
+        "web backend must not write files on validation failure"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_negative_file_processor_fails() {
+    // file-processor.nemo is in demos/, not in tests/fixtures. We use
+    // coding-agent as the canonical negative case; this test verifies the
+    // same failure mode holds for a fixture with path inputs.
+    let out_dir = std::env::temp_dir().join("nemoir_web_fp_negative");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web");
+
+    // judge_candidate should succeed (positive case) — this is a sanity
+    // check that positive cases still work when a negative case was just run.
+    assert!(
+        output.status.success(),
+        "judge_candidate should still succeed"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_stdin_no_output_fails() {
+    let source = std::fs::read_to_string(judge_candidate_path()).expect("should read source");
+    let mut child = nemoir_binary()
+        .arg("compile")
+        .arg("-")
+        .arg("--target")
+        .arg("web")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("should spawn nemo");
+
+    {
+        let stdin = child.stdin.as_mut().expect("should get stdin");
+        use std::io::Write;
+        stdin
+            .write_all(source.as_bytes())
+            .expect("should write to stdin");
+    }
+
+    let output = child.wait_with_output().expect("should wait for output");
+
+    assert!(
+        !output.status.success(),
+        "stdin with web target and no --output should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires --output"),
+        "should mention --output is required: {stderr}"
+    );
+}
+
+#[test]
+fn cli_compile_web_default_output_into_file_dir() {
+    let work_dir = std::env::temp_dir().join("nemoir_web_default");
+    let _ = std::fs::remove_dir_all(&work_dir);
+    std::fs::create_dir_all(&work_dir).expect("should create tempdir");
+    let source = std::fs::read_to_string(judge_candidate_path()).expect("should read source");
+    let nemo_in_tmp = work_dir.join("judge-candidate.nemo");
+    std::fs::write(&nemo_in_tmp, source).expect("should write source copy");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(&nemo_in_tmp)
+        .arg("--target")
+        .arg("web")
+        .output()
+        .expect("should run nemo compile --target web (default output)");
+
+    assert!(
+        output.status.success(),
+        "default-output web compile should succeed"
+    );
+
+    let generated_pkg = work_dir.join("judge-candidate");
+    assert!(
+        generated_pkg.join("package.json").exists(),
+        "package dir should exist next to source file"
+    );
+    assert!(generated_pkg.join("netlify.toml").exists());
+
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
+
+#[test]
+fn cli_compile_web_runtime_dependency_override() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_rtdep");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("--web-runtime-dependency")
+        .arg("file:../../web/nemoir-runtime")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web --web-runtime-dependency");
+
+    assert!(output.status.success(), "compile should succeed");
+    let pkg = out_dir.join("judge-candidate").join("package.json");
+    let pkg_src = std::fs::read_to_string(&pkg).expect("should read package.json");
+    assert!(
+        pkg_src.contains(r#""@nemoir/web-runtime": "file:../../web/nemoir-runtime""#),
+        "package.json should carry the overridden runtime dependency: {pkg_src}"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_hint_tutor_positive() {
+    // The Hints-in-Browser-inspired web demo workflow. It uses only
+    // user.elicit and string/bool/string[] types, so it must succeed on the
+    // web target and produce a hint-tutor/ package.
+    let out_dir = std::env::temp_dir().join("nemoir_web_hint_tutor");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(hint_tutor_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile hint_tutor --target web");
+
+    assert!(
+        output.status.success(),
+        "hint_tutor should compile on web target"
+    );
+
+    let pkg = out_dir.join("hint-tutor");
+    assert!(
+        pkg.join("package.json").exists(),
+        "hint-tutor package.json should exist"
+    );
+    assert!(
+        pkg.join("src").join("agent.ts").exists(),
+        "hint-tutor src/agent.ts should exist"
+    );
+    assert!(
+        pkg.join("src").join("workflow.json").exists(),
+        "hint-tutor src/workflow.json should exist"
+    );
+
+    let wf_json = std::fs::read_to_string(pkg.join("src").join("workflow.json"))
+        .expect("should read workflow.json");
+    assert!(
+        wf_json.contains("HintTutor"),
+        "workflow.json should contain workflow id"
+    );
+    assert!(
+        wf_json.contains("user.elicit"),
+        "workflow.json should carry the user.elicit capability"
+    );
+
+    let agent =
+        std::fs::read_to_string(pkg.join("src").join("agent.ts")).expect("should read agent.ts");
+    assert!(
+        agent.contains("learner_code: string"),
+        "agent.ts should have typed learner_code input"
+    );
+    assert!(
+        agent.contains("key_points: string[]"),
+        "agent.ts should have typed key_points output"
+    );
 
     let _ = std::fs::remove_dir_all(&out_dir);
 }

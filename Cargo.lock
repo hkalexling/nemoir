@@ -341,6 +341,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemoir-backend-web"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "nemoir-dsl-fe",
+ "nemoir-ir",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+]
+
+[[package]]
 name = "nemoir-cli"
 version = "0.1.0"
 dependencies = [
@@ -348,6 +361,7 @@ dependencies = [
  "miette",
  "nemoir-backend-python",
  "nemoir-backend-visualizer",
+ "nemoir-backend-web",
  "nemoir-dsl-fe",
  "nemoir-ir",
  "serde_yaml",
@@ -519,6 +533,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

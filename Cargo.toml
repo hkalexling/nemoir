@@ -6,6 +6,7 @@ members = [
     "crates/nemoir-cli",
     "crates/nemoir-backend-visualizer",
     "crates/nemoir-backend-python",
+    "crates/nemoir-backend-web",
 ]
 
 [workspace.package]

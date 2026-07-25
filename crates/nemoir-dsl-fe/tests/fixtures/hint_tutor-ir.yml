@@ -1,0 +1,170 @@
+ir_version: '0.1'
+kind: workflow_ir
+source:
+  frontend: nemo_dsl
+  file: hint_tutor.nemo
+workflow:
+  id: HintTutor
+  entry: Diagnose
+  exits:
+  - Done
+  transition_semantics:
+    selection: first_match_by_priority
+    no_match: error_unless_exit
+inputs:
+- id: task
+  type: string
+- id: learner_code
+  type: string
+- id: failure_report
+  type: string
+capabilities:
+- user.elicit
+policies: []
+nodes:
+- id: Diagnose
+  annotations:
+  - entry
+  prompt: |-
+    You are a Socratic programming tutor. Read the problem, the learner's code, and
+    any failure report (it may be empty). Identify the most likely bug and state it
+    concisely (one or two sentences). Decide whether you need to ask the learner a
+    clarifying question before giving a hint.
+  reads:
+  - ref:
+      kind: input
+      name: task
+    optional: false
+    origin: implicit_entry_input
+  - ref:
+      kind: input
+      name: learner_code
+    optional: false
+    origin: implicit_entry_input
+  - ref:
+      kind: input
+      name: failure_report
+    optional: false
+    origin: implicit_entry_input
+  writes:
+  - name: needs_clarify
+    type: bool
+    optional: false
+  - name: suspected_bug
+    type: string
+    optional: false
+  requires: []
+  transitions:
+  - to: AskClarify
+    priority: 0
+    reason: explicit_transition
+    guard:
+      kind: if
+      cond:
+        kind: ref
+        ref:
+          kind: node_output
+          node: Diagnose
+          field: needs_clarify
+  - to: Hint
+    priority: 1
+    reason: explicit_transition
+    guard:
+      kind: if
+      cond:
+        kind: not
+        expr:
+          kind: ref
+          ref:
+            kind: node_output
+            node: Diagnose
+            field: needs_clarify
+- id: AskClarify
+  annotations: []
+  prompt: |-
+    You need more information before you can give a good hint. Call the `elicit` tool
+    to ask the learner ONE focused clarifying question about the suspected bug. Do not
+    reveal the fix or any code. Be Socratic and friendly.
+    After the learner responds, record THEIR answer (not your question) as the
+    `clarification` output. You MUST call the `elicit` tool — do not write the
+    question yourself as the output.
+  reads:
+  - ref:
+      kind: node_output
+      node: Diagnose
+      field: suspected_bug
+    optional: false
+    origin: dsl_stage_input
+  writes:
+  - name: clarification
+    type: string
+    optional: false
+  requires:
+  - capability: user.elicit
+  transitions:
+  - to: Hint
+    priority: 0
+    reason: fallthrough
+    guard:
+      kind: always
+- id: Hint
+  annotations: []
+  prompt: |-
+    Using the suspected bug and the learner's clarification (their answer to your
+    clarifying question, if you asked one), produce:
+    (1) a concise list of diagnostic key points (each a short sentence), and
+    (2) a single Socratic hint that guides the learner toward the fix WITHOUT revealing
+    the solution. Be friendly and specific. Do not include the repaired code.
+  reads:
+  - ref:
+      kind: node_output
+      node: Diagnose
+      field: suspected_bug
+    optional: false
+    origin: dsl_stage_input
+  - ref:
+      kind: node_output
+      node: AskClarify
+      field: clarification
+    optional: true
+    origin: dsl_stage_input
+  writes:
+  - name: key_points
+    type: string[]
+    optional: false
+  - name: hint
+    type: string
+    optional: false
+  requires: []
+  transitions:
+  - to: Done
+    priority: 0
+    reason: fallthrough
+    guard:
+      kind: always
+- id: Done
+  annotations:
+  - exit
+  prompt: Return the final hint and key points to the learner.
+  reads:
+  - ref:
+      kind: node_output
+      node: Hint
+      field: hint
+    optional: false
+    origin: dsl_stage_input
+  - ref:
+      kind: node_output
+      node: Hint
+      field: key_points
+    optional: false
+    origin: dsl_stage_input
+  writes:
+  - name: hint
+    type: string
+    optional: false
+  - name: key_points
+    type: string[]
+    optional: false
+  requires: []
+  transitions: []
