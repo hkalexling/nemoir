@@ -1,0 +1,17 @@
+workflow JsSandboxUserCode {
+  input {
+    code: string
+    payload: json
+  }
+
+  policy {
+    before browser.js.sandbox(code) requires user.confirm
+  }
+
+  stage RunSandbox {
+    exec: browser.js.sandbox(code: code, input: payload)
+    output: {
+      result: json
+    }
+  }
+}

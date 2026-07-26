@@ -241,7 +241,7 @@ The dev server serves cross-origin isolation headers (COOP/COEP).\n\n\
   insufficient. Free browser storage or choose a smaller model. Cached models\n\
   never warn. For deterministic-only workflows this section does not apply.\n\n\
 ## Building against a local runtime checkout\n\n\
-`@nemoir/web-runtime` is published to npm (>= 0.2.0), so `npm install` resolves it\n\
+`@nemoir/web-runtime` is published to npm (>= 0.3.1), so `npm install` resolves it\n\
 directly. To build against an in-repo checkout during development, point the compile step at it:\n\n\
 ```bash\n\
 nemo compile <file>.nemo --target web \\
@@ -295,13 +295,14 @@ fn html_escape(s: &str) -> String {
 /// only React consumer in the generated app. WebLLM is lazy-imported by the
 /// runtime so it is code-split into a separate chunk (not on the first-paint
 /// critical path).
-pub fn emit_main_tsx(has_js_run: bool) -> String {
+pub fn emit_main_tsx(has_js_run: bool, has_js_sandbox: bool) -> String {
     let src = r##"import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Agent, HAS_MODEL_STAGES, WORKFLOW_ID, type AgentInput } from "./agent";
+import { Agent, HAS_JS_SANDBOX, HAS_MODEL_STAGES, WORKFLOW_ID, type AgentInput } from "./agent";
 import workflowManifest from "./workflow.json";
 import {
   createWebllmSession,
+  __NEMOIR_SANDBOX_IMPORT__
   isCrossOriginIsolated,
   isWebGPUAvailable,
   type ModelAdapter,
@@ -316,6 +317,7 @@ import {
 // Build the browser.js.run worker factory from the emitted static worker.
 const jsWorkerFactory = () =>
   new Worker(new URL("./js.worker.ts", import.meta.url), { type: "module" });
+__NEMOIR_SANDBOX_FACTORY__
 import "./app.css";
 
 type InputSpec = { id: string; type: string };
@@ -547,7 +549,7 @@ function App() {
       const agent = new Agent({
         modelAdapter,
         uiHost,
-        browserTools: { jsWorkerFactory },
+        browserTools: __NEMOIR_BROWSER_TOOLS__,
       });
       const parsed: Record<string, unknown> = {};
       for (const inp of inputs) {
@@ -656,6 +658,25 @@ function App() {
           ? "🔒 Running locally via WebLLM — prompts and outputs stay in this browser."
           : "🔒 Running locally in this browser — no model calls, no cloud dependency."}
       </section>
+
+      {HAS_JS_SANDBOX && (() => {
+        // Derive each sandbox stage's declared write names from the compiled
+        // IR so the required return envelope is visible where code is authored.
+        const sandboxStages = (workflowManifest.nodes ?? [])
+          .filter((n: any) => n.execution?.kind === "tool" && n.execution?.capability === "browser.js.sandbox")
+          .map((n: any) => ({ id: n.id as string, writes: (n.writes ?? []).map((w: any) => w.name as string) }));
+        return (
+          <section className="disclosure sandbox">
+            <p>⚠️ This workflow may ask to run user- or model-provided JavaScript. Source is shown for confirmation and runs in an isolated, network-restricted sandbox with strict limits.</p>
+            <p>Dynamic code is an async function body receiving <code>input</code>; it must return a plain JSON object with the stage's declared write names:</p>
+            <ul>
+              {sandboxStages.map((s: { id: string; writes: string[] }) => (
+                <li key={s.id}><strong>{s.id}</strong>: <code>return {`{ ${s.writes.join(", ")} }`}</code></li>
+              ))}
+            </ul>
+          </section>
+        );
+      })()}
 
       {HAS_MODEL_STAGES && !webgpu && (
         <section className="card warn">
@@ -936,20 +957,38 @@ function App() {
 createRoot(document.getElementById("root")!).render(<App />);
 "##.to_string();
 
-    let src = if has_js_run {
+    let sandbox_import = if has_js_sandbox {
+        "createOpaqueOriginJsSandbox,\n"
+    } else {
+        ""
+    };
+    let sandbox_factory = if has_js_sandbox {
+        "// Build the opaque-origin runner used only for dynamic browser.js.sandbox stages.\nconst jsSandboxRunner = createOpaqueOriginJsSandbox();\n"
+    } else {
+        ""
+    };
+    let browser_tools = match (has_js_run, has_js_sandbox) {
+        (true, true) => "{ jsWorkerFactory, jsSandboxRunner }",
+        (true, false) => "{ jsWorkerFactory }",
+        (false, true) => "{ jsSandboxRunner }",
+        (false, false) => "{}",
+    };
+
+    let src = src
+        .replace("__NEMOIR_SANDBOX_IMPORT__\n", sandbox_import)
+        .replace("__NEMOIR_SANDBOX_FACTORY__\n", sandbox_factory)
+        .replace("__NEMOIR_BROWSER_TOOLS__", browser_tools);
+
+    if has_js_run {
         src
     } else {
-        // No `browser.js.run` stage: drop the `jsWorkerFactory` definition
-        // and its `new Worker(new URL("./js.worker.ts", ...))` import so Vite
-        // does not statically require an asset that is not emitted, and pass
-        // an empty browserTools object (http.fetch + storage only).
+        // No trusted `browser.js.run` stage: drop the static-worker factory so
+        // Vite does not try to resolve an asset that was not emitted.
         src.replace(
             "// Build the browser.js.run worker factory from the emitted static worker.\nconst jsWorkerFactory = () =>\n  new Worker(new URL(\"./js.worker.ts\", import.meta.url), { type: \"module\" });\n",
             "",
         )
-        .replace("browserTools: { jsWorkerFactory },", "browserTools: {},")
-    };
-    src
+    }
 }
 
 /// Render the generic runner UI stylesheet (`src/app.css`).
@@ -984,6 +1023,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .card.error { background: var(--err-bg); border-color: var(--err-border); }
 .disclosure { font-size: 0.85rem; padding: 0.5rem 0.75rem; border-radius: 8px; margin: 0.5rem 0; }
 .disclosure.local { background: #ecfdf5; color: #065f46; }
+.disclosure.sandbox { background: #fff7ed; color: #9a3412; border: 1px solid #fdba74; }
 .field { margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.5rem; }
 .field label { min-width: 120px; font-weight: 600; }
 .field input[type="text"], .field input[type="number"], .field textarea {
@@ -1014,7 +1054,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 pre { background: #f4f4f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal { background: var(--card); padding: 1.25rem; border-radius: 10px; min-width: 320px; }
-.modal p { margin: 0 0 0.75rem; }
+.modal p { margin: 0 0 0.75rem; white-space: pre-wrap; max-height: 50vh; overflow: auto; }
 .modal input { width: 100%; padding: 0.4rem; border: 1px solid var(--border); border-radius: 6px; }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.75rem; }
 "##.to_string()
@@ -1118,7 +1158,7 @@ mod tests {
 
     #[test]
     fn main_tsx_imports_agent_and_manifest() {
-        let s = emit_main_tsx(true);
+        let s = emit_main_tsx(true, false);
         assert!(s.contains("from \"./agent\""));
         assert!(s.contains("import workflowManifest from \"./workflow.json\""));
         assert!(s.contains("createWebllmSession"));
@@ -1140,7 +1180,7 @@ mod tests {
 
     #[test]
     fn main_tsx_omits_js_worker_when_unused() {
-        let s = emit_main_tsx(false);
+        let s = emit_main_tsx(false, false);
         // No js.run stage → no jsWorkerFactory definition, no js.worker.ts import,
         // and an empty browserTools object (http.fetch + storage only).
         assert!(!s.contains("jsWorkerFactory"));
@@ -1149,6 +1189,29 @@ mod tests {
         // The json form control is always present (harmless when no json inputs).
         assert!(s.contains(r###"case "json":"###));
         assert!(s.contains("invalidJsonInputs"));
+    }
+
+    #[test]
+    fn main_tsx_wires_opaque_origin_sandbox_only_when_used() {
+        let s = emit_main_tsx(false, true);
+        assert!(s.contains("createOpaqueOriginJsSandbox"));
+        assert!(s.contains("jsSandboxRunner"));
+        assert!(s.contains("browserTools: { jsSandboxRunner }"));
+        assert!(!s.contains("jsWorkerFactory"));
+        assert!(!s.contains("./js.worker.ts"));
+    }
+
+    #[test]
+    fn main_tsx_renders_sandbox_return_envelope_contract() {
+        // When has_js_sandbox=true, the generated disclosure derives each
+        // sandbox stage's write names from the compiled IR so the required
+        // return envelope is visible where code is authored.
+        let s = emit_main_tsx(false, true);
+        assert!(s.contains("browser.js.sandbox"));
+        assert!(s.contains("Dynamic code is an async function body"));
+        assert!(s.contains("must return a plain JSON object"));
+        assert!(s.contains("return {`{ ${s.writes.join("));
+        assert!(s.contains("sandboxStages"));
     }
 
     #[test]

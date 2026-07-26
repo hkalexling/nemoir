@@ -23,10 +23,17 @@ pub fn emit_workflow_json(ir: &WorkflowIr) -> Result<String, WebBackendError> {
     serde_json::to_string_pretty(ir).map_err(|e| WebBackendError::JsonSerialization(e.to_string()))
 }
 
-/// Check whether an IR contains any `browser.js.run` exec stage.
+/// Check whether an IR contains any trusted `browser.js.run` exec stage.
 pub fn has_js_run_stage(ir: &nemoir_ir::WorkflowIr) -> bool {
     ir.nodes.iter().any(|n| {
         matches!(&n.execution, nemoir_ir::StageExecution::Tool { capability, .. } if capability == "browser.js.run")
+    })
+}
+
+/// Check whether an IR contains any dynamic `browser.js.sandbox` exec stage.
+pub fn has_js_sandbox_stage(ir: &nemoir_ir::WorkflowIr) -> bool {
+    ir.nodes.iter().any(|n| {
+        matches!(&n.execution, nemoir_ir::StageExecution::Tool { capability, .. } if capability == "browser.js.sandbox")
     })
 }
 
@@ -173,10 +180,13 @@ pub fn emit_agent_ts(ir: &WorkflowIr) -> Result<String, WebBackendError> {
         .any(|n| matches!(n.execution, nemoir_ir::StageExecution::Model));
     let has_model_stages_str = if has_model_stages { "true" } else { "false" };
 
-    // Detect whether the workflow uses browser.js.run, so the generated
-    // runner only emits (and imports) the js.worker.ts asset when needed.
+    // Detect trusted and dynamic JavaScript execution separately. The former
+    // needs an emitted same-origin Worker; the latter wires the runtime's
+    // opaque-origin iframe sandbox only when the IR declares it.
     let has_js_run = has_js_run_stage(ir);
     let has_js_run_str = if has_js_run { "true" } else { "false" };
+    let has_js_sandbox = has_js_sandbox_stage(ir);
+    let has_js_sandbox_str = if has_js_sandbox { "true" } else { "false" };
 
     // Required capabilities
     let caps: Vec<String> = ir
@@ -217,6 +227,7 @@ export const EXIT_STAGE_IDS = [{exits_str}] as const;
 export const REQUIRED_CAPABILITIES = [{caps_str}] as const;
 export const HAS_MODEL_STAGES = {has_model_stages_str} as const;
 export const HAS_JS_RUN = {has_js_run_str} as const;
+export const HAS_JS_SANDBOX = {has_js_sandbox_str} as const;
 
 export interface AgentInput {{
 {input_fields}}}
@@ -241,8 +252,8 @@ export interface AgentOptions {{
   uiHost?: WebUiHost;
   /**
    * Options for browser-native tools (http.fetch, browser.storage.*,
-   * browser.js.run). Pass `jsWorkerFactory` when the workflow uses
-   * `browser.js.run`.
+   * browser.js.run, browser.js.sandbox). Pass `jsWorkerFactory` for trusted
+   * browser.js.run stages or `jsSandboxRunner` for dynamic sandbox stages.
    */
   browserTools?: BrowserToolsOptions;
   /** Default run options (can be overridden per run). */
@@ -306,6 +317,7 @@ export class Agent {{
         caps_str = caps_str,
         has_model_stages_str = has_model_stages_str,
         has_js_run_str = has_js_run_str,
+        has_js_sandbox_str = has_js_sandbox_str,
         input_fields = input_fields,
         output_fields = output_fields,
     );
@@ -330,7 +342,8 @@ pub fn build_files(
     let workflow_json = emit_workflow_json(ir)?;
     let agent_ts = emit_agent_ts(ir)?;
     let has_js_run = has_js_run_stage(ir);
-    let main_tsx = crate::emit::emit_main_tsx(has_js_run);
+    let has_js_sandbox = has_js_sandbox_stage(ir);
+    let main_tsx = crate::emit::emit_main_tsx(has_js_run, has_js_sandbox);
     let app_css = crate::emit::emit_app_css();
 
     let mut files = vec![

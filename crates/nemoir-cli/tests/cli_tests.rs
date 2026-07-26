@@ -45,6 +45,30 @@ fn js_run_positive_path() -> String {
     .to_string()
 }
 
+fn js_sandbox_positive_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/js_sandbox_positive.nemo"
+    )
+    .to_string()
+}
+
+fn js_sandbox_user_code_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/js_sandbox_user_code.nemo"
+    )
+    .to_string()
+}
+
+fn js_sandbox_code_json_type_err_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/js_sandbox_code_json_type_err.nemo"
+    )
+    .to_string()
+}
+
 fn dup_stage_path() -> String {
     concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -882,6 +906,120 @@ fn cli_compile_web_js_run_positive() {
     assert!(
         agent_ts.contains("browser.js.run"),
         "agent.ts REQUIRED_CAPABILITIES should list browser.js.run: {agent_ts}"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_js_sandbox_positive() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_js_sandbox_pos");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(js_sandbox_positive_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile js_sandbox_positive --target web");
+
+    assert!(
+        output.status.success(),
+        "js_sandbox_positive should compile on web target: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pkg = out_dir.join("js-sandbox-positive");
+    assert!(
+        !pkg.join("src").join("js.worker.ts").exists(),
+        "dynamic sandbox must not reuse the trusted same-origin js.worker.ts"
+    );
+    let agent_ts =
+        std::fs::read_to_string(pkg.join("src").join("agent.ts")).expect("should read agent.ts");
+    assert!(
+        agent_ts.contains("HAS_JS_SANDBOX = true"),
+        "agent.ts should declare HAS_JS_SANDBOX = true: {agent_ts}"
+    );
+    assert!(
+        agent_ts.contains("HAS_JS_RUN = false"),
+        "agent.ts should keep trusted HAS_JS_RUN false: {agent_ts}"
+    );
+    let main_tsx =
+        std::fs::read_to_string(pkg.join("src").join("main.tsx")).expect("should read main.tsx");
+    assert!(main_tsx.contains("createOpaqueOriginJsSandbox"));
+    assert!(main_tsx.contains("jsSandboxRunner"));
+    let workflow = std::fs::read_to_string(pkg.join("src").join("workflow.json"))
+        .expect("should read workflow.json");
+    assert!(workflow.contains("browser.js.sandbox"));
+    assert!(workflow.contains("before browser.js.sandbox(code) requires user.confirm"));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_js_sandbox_user_code_is_model_free() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_js_sandbox_user");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(js_sandbox_user_code_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should compile user-code sandbox workflow");
+    assert!(
+        output.status.success(),
+        "user-code sandbox workflow should compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let pkg = out_dir.join("js-sandbox-user-code");
+    let agent_ts =
+        std::fs::read_to_string(pkg.join("src").join("agent.ts")).expect("should read agent.ts");
+    assert!(agent_ts.contains("HAS_MODEL_STAGES = false"));
+    assert!(agent_ts.contains("HAS_JS_SANDBOX = true"));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_js_sandbox_json_code_type_rejected() {
+    // The DSL lowers successfully; the web-target capability contract must
+    // reject browser.js.sandbox `code` that resolves to a non-string type.
+    let out_dir = std::env::temp_dir().join("nemoir_web_js_sandbox_json_type");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(js_sandbox_code_json_type_err_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile js_sandbox_code_json_type_err --target web");
+
+    assert!(
+        !output.status.success(),
+        "json-typed code input should fail on the web target"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("non-optional string"),
+        "should mention non-optional string: {stderr}"
+    );
+    assert!(
+        !out_dir.join("js-sandbox-code-json-type").exists(),
+        "web backend must not write files on validation failure"
     );
 
     let _ = std::fs::remove_dir_all(&out_dir);

@@ -4,7 +4,7 @@
 //! compile time if a workflow requires something the web target cannot
 //! provide (`fs.*`, `os.shell`, `path` types, deterministic stages).
 
-use nemoir_ir::{StageExecution, WorkflowIr};
+use nemoir_ir::{Expr, Policy, Ref, StageExecution, WorkflowIr, Write};
 
 /// Capabilities the web target supports (including deterministic-only ones).
 /// Everything else is a compile-time error for `--target web`.
@@ -15,6 +15,7 @@ const WEB_ALLOWED_CAPABILITIES: &[&str] = &[
     "browser.storage.read",
     "browser.storage.write",
     "browser.js.run",
+    "browser.js.sandbox",
 ];
 
 /// Capabilities the web target supports for deterministic (`exec:`) stages.
@@ -25,11 +26,12 @@ const WEB_DETERMINISTIC_CAPABILITIES: &[&str] = &[
     "browser.storage.read",
     "browser.storage.write",
     "browser.js.run",
+    "browser.js.sandbox",
 ];
 
 /// Capabilities that are ONLY allowed in deterministic stages, not as
 /// model-stage `requires` or policy triggers/requires.
-const WEB_DETERMINISTIC_ONLY_CAPABILITIES: &[&str] = &["browser.js.run"];
+const WEB_DETERMINISTIC_ONLY_CAPABILITIES: &[&str] = &["browser.js.run", "browser.js.sandbox"];
 
 /// Check a capability name against the web allowlist.
 fn is_web_allowed(capability: &str) -> bool {
@@ -40,6 +42,72 @@ fn is_web_allowed(capability: &str) -> bool {
 /// model stages or policies).
 fn is_deterministic_only(capability: &str) -> bool {
     WEB_DETERMINISTIC_ONLY_CAPABILITIES.contains(&capability)
+}
+
+/// Dynamic sandbox execution is only allowed when the workflow makes the
+/// approval step explicit and inspectable in IR. The policy engine supplies
+/// the source preview to `user.confirm` at runtime.
+fn is_sandbox_approval_policy(policy: &Policy) -> bool {
+    if policy.kind != "before" || policy.trigger.capability != "browser.js.sandbox" {
+        return false;
+    }
+
+    let Some(code_binding) = policy.trigger.bind.get("code") else {
+        return false;
+    };
+    if code_binding.kind != "arg" || code_binding.name != "code" {
+        return false;
+    }
+
+    policy.requires.as_ref().is_some_and(|requires| {
+        requires
+            .iter()
+            .any(|req| req.capability == "user.confirm" && req.args.is_empty())
+    })
+}
+
+/// Resolve a `browser.js.sandbox` `code` ref to its IR type and reject anything
+/// that is not a non-optional `string`. The IR validator already ensures the
+/// referenced input/output exists; here we additionally enforce the catalog
+/// type contract (`code: String`) at the web compile-time boundary.
+fn validate_sandbox_code_ref(
+    r#ref: &Ref,
+    node: &nemoir_ir::Node,
+    input_types: &std::collections::HashMap<&str, &str>,
+    writes_per_node: &std::collections::HashMap<&str, std::collections::HashMap<&str, &Write>>,
+    errors: &mut Vec<String>,
+) {
+    let (where_desc, found_type, is_optional) = match r#ref {
+        Ref::Input { name } => match input_types.get(name.as_str()) {
+            Some(ty) => (format!("input '{}'", name), Some(*ty), false),
+            None => return, // existence is owned by the IR validator
+        },
+        Ref::NodeOutput {
+            node: ref_node,
+            field,
+        } => {
+            match writes_per_node
+                .get(ref_node.as_str())
+                .and_then(|m| m.get(field.as_str()))
+            {
+                Some(w) => (
+                    format!("output '{}.{}'", ref_node, field),
+                    Some(w.ty.as_str()),
+                    w.optional,
+                ),
+                None => return,
+            }
+        }
+        Ref::Bound { .. } => return, // policy-local only; rejected by the IR validator
+    };
+    match found_type {
+        Some("string") if !is_optional => {}
+        Some(ty) => errors.push(format!(
+            "web-target-error: deterministic stage \"{}\" (capability browser.js.sandbox) 'code' must resolve to a non-optional string, but {} has type '{}{}'",
+            node.id, where_desc, ty, if is_optional { "?" } else { "" }
+        )),
+        None => {}
+    }
 }
 
 /// Check whether an IR type string references the `path` type.
@@ -63,6 +131,24 @@ fn type_uses_path(ty: &str) -> bool {
 /// Returns `Ok(())` if the workflow is web-compatible.
 pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
     let mut errors: Vec<String> = Vec::new();
+
+    // Resolve input types by name (inputs are never optional in the IR).
+    let input_types: std::collections::HashMap<&str, &str> = ir
+        .inputs
+        .iter()
+        .map(|inp| (inp.id.as_str(), inp.ty.as_str()))
+        .collect();
+    // Resolve node output writes as node -> (field -> write).
+    let writes_per_node: std::collections::HashMap<&str, std::collections::HashMap<&str, &Write>> =
+        ir.nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.id.as_str(),
+                    n.writes.iter().map(|w| (w.name.as_str(), w)).collect(),
+                )
+            })
+            .collect();
 
     // Top-level capabilities
     for cap in &ir.capabilities {
@@ -122,12 +208,11 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                     node.id, capability
                 ));
             }
-            // browser.js.run code must be a compile-time string literal —
-            // it executes trusted workflow-author code, never model- or
-            // input-derived JavaScript.
+            // browser.js.run executes trusted workflow-author code, never
+            // model- or input-derived JavaScript.
             if capability == "browser.js.run" {
                 if let Some(code_expr) = args.get("code") {
-                    if !matches!(code_expr, nemoir_ir::Expr::Literal { ty, .. } if ty == "string") {
+                    if !matches!(code_expr, Expr::Literal { ty, .. } if ty == "string") {
                         errors.push(format!(
                             "web-target-error: deterministic stage \"{}\" (capability browser.js.run) requires a literal string for the 'code' argument; input/output refs are not allowed",
                             node.id
@@ -138,6 +223,34 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                         "web-target-error: deterministic stage \"{}\" (capability browser.js.run) is missing the required 'code' argument",
                         node.id
                     ));
+                }
+            }
+
+            // browser.js.sandbox is the intentionally dynamic path. Source may
+            // be a string literal, workflow input, or prior stage output, but
+            // never an arbitrary expression. Catalog declares `code: String`,
+            // so the referenced value must resolve to a non-optional string;
+            // its mandatory user-confirm policy is checked after this loop.
+            if capability == "browser.js.sandbox" {
+                match args.get("code") {
+                    Some(Expr::Literal { ty, .. }) if ty == "string" => {}
+                    Some(Expr::Ref { r#ref }) => {
+                        validate_sandbox_code_ref(
+                            r#ref,
+                            node,
+                            &input_types,
+                            &writes_per_node,
+                            &mut errors,
+                        );
+                    }
+                    Some(_) => errors.push(format!(
+                        "web-target-error: deterministic stage \"{}\" (capability browser.js.sandbox) requires 'code' to be a string literal or input/output ref",
+                        node.id
+                    )),
+                    None => errors.push(format!(
+                        "web-target-error: deterministic stage \"{}\" (capability browser.js.sandbox) is missing the required 'code' argument",
+                        node.id
+                    )),
                 }
             }
         }
@@ -152,11 +265,23 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                 policy.id, policy.trigger.capability
             ));
         }
-        // Deterministic-only capabilities cannot be used in policies
-        if is_deterministic_only(&policy.trigger.capability) {
+        // `browser.js.sandbox` is the one deterministic-only capability
+        // permitted as a policy trigger: it must use the required explicit
+        // before/user.confirm approval form. Other deterministic-only tools
+        // remain unavailable to policies.
+        if is_deterministic_only(&policy.trigger.capability)
+            && policy.trigger.capability != "browser.js.sandbox"
+        {
             errors.push(format!(
                 "web-target-error: policy \"{}\" triggers capability \"{}\" which is deterministic-stage-only and cannot be used in policies",
                 policy.id, policy.trigger.capability
+            ));
+        }
+        if policy.trigger.capability == "browser.js.sandbox" && !is_sandbox_approval_policy(policy)
+        {
+            errors.push(format!(
+                "web-target-error: policy \"{}\" must approve browser.js.sandbox with `before browser.js.sandbox(code) requires user.confirm`",
+                policy.id
             ));
         }
         // Before-policy required capabilities
@@ -176,6 +301,23 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                 }
             }
         }
+    }
+
+    let sandbox_is_used = ir.nodes.iter().any(|node| {
+        matches!(
+            &node.execution,
+            StageExecution::Tool { capability, .. } if capability == "browser.js.sandbox"
+        )
+    });
+    if sandbox_is_used && !ir.policies.iter().any(is_sandbox_approval_policy) {
+        errors.push(
+            "web-target-error: browser.js.sandbox requires an explicit approval policy: `before browser.js.sandbox(code) requires user.confirm`".to_string(),
+        );
+    }
+    if sandbox_is_used && !ir.capabilities.iter().any(|cap| cap == "user.confirm") {
+        errors.push(
+            "web-target-error: browser.js.sandbox requires user.confirm to be declared in top-level capabilities".to_string(),
+        );
     }
 
     if errors.is_empty() {
@@ -252,6 +394,30 @@ mod tests {
                     execution: StageExecution::Model,
                 },
             ],
+        }
+    }
+
+    fn sandbox_approval_policy() -> Policy {
+        let mut bind = indexmap::IndexMap::new();
+        bind.insert(
+            "code".into(),
+            BindArg {
+                kind: "arg".into(),
+                name: "code".into(),
+            },
+        );
+        Policy {
+            id: "before browser.js.sandbox(code) requires user.confirm".into(),
+            kind: "before".into(),
+            trigger: Trigger {
+                capability: "browser.js.sandbox".into(),
+                bind,
+            },
+            requires: Some(vec![RequiredCapability {
+                capability: "user.confirm".into(),
+                args: indexmap::IndexMap::new(),
+            }]),
+            condition: None,
         }
     }
 
@@ -436,6 +602,238 @@ mod tests {
         );
         let err = validate_for_web(&ir).expect_err("ref code should be rejected");
         assert!(err.iter().any(|e| e.contains("literal string")), "{err:?}");
+    }
+
+    #[test]
+    fn allows_browser_js_sandbox_with_dynamic_ref_and_approval_policy() {
+        let mut ir = make_ir(
+            vec!["browser.js.sandbox".into(), "user.confirm".into()],
+            vec!["browser.js.sandbox"],
+            StageExecution::Tool {
+                capability: "browser.js.sandbox".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Ref {
+                            r#ref: Ref::Input {
+                                name: "user_code".into(),
+                            },
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "json".into(),
+                            value: serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+        ir.inputs.push(Input {
+            id: "user_code".into(),
+            ty: "string".into(),
+        });
+        ir.policies.push(sandbox_approval_policy());
+
+        validate_for_web(&ir)
+            .expect("dynamic sandbox source with explicit user confirmation should pass");
+    }
+
+    fn sandbox_with_code_input_ref(input_type: &str) -> WorkflowIr {
+        let mut ir = make_ir(
+            vec!["browser.js.sandbox".into(), "user.confirm".into()],
+            vec!["browser.js.sandbox"],
+            StageExecution::Tool {
+                capability: "browser.js.sandbox".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Ref {
+                            r#ref: Ref::Input {
+                                name: "user_code".into(),
+                            },
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "json".into(),
+                            value: serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+        ir.inputs.push(Input {
+            id: "user_code".into(),
+            ty: input_type.into(),
+        });
+        ir.policies.push(sandbox_approval_policy());
+        ir
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_with_json_typed_code_input() {
+        let ir = sandbox_with_code_input_ref("json");
+        let err = validate_for_web(&ir).expect_err("json code input should be rejected");
+        assert!(
+            err.iter().any(|e| e.contains("non-optional string")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_with_string_array_typed_code_input() {
+        let ir = sandbox_with_code_input_ref("string[]");
+        let err = validate_for_web(&ir).expect_err("string[] code input should be rejected");
+        assert!(
+            err.iter().any(|e| e.contains("non-optional string")),
+            "{err:?}"
+        );
+    }
+
+    fn sandbox_with_code_node_output_ref(write_type: &str, optional: bool) -> WorkflowIr {
+        // The exit node ("Done") produces a write consumed as the sandbox
+        // stage's `code` ref. Graph reachability is owned by the IR validator;
+        // validate_for_web only inspects the declared types.
+        let mut ir = make_ir(
+            vec!["browser.js.sandbox".into(), "user.confirm".into()],
+            vec!["browser.js.sandbox"],
+            StageExecution::Tool {
+                capability: "browser.js.sandbox".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Ref {
+                            r#ref: Ref::NodeOutput {
+                                node: "Done".into(),
+                                field: "code".into(),
+                            },
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "json".into(),
+                            value: serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+        ir.nodes[1].writes = vec![Write {
+            name: "code".into(),
+            ty: write_type.into(),
+            optional,
+        }];
+        ir.policies.push(sandbox_approval_policy());
+        ir
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_with_optional_code_node_output() {
+        let ir = sandbox_with_code_node_output_ref("string", true);
+        let err = validate_for_web(&ir).expect_err("optional code output should be rejected");
+        assert!(
+            err.iter().any(|e| e.contains("non-optional string")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_with_json_typed_code_node_output() {
+        let ir = sandbox_with_code_node_output_ref("json", false);
+        let err = validate_for_web(&ir).expect_err("json code output should be rejected");
+        assert!(
+            err.iter().any(|e| e.contains("non-optional string")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn allows_browser_js_sandbox_with_non_optional_string_code_node_output() {
+        let ir = sandbox_with_code_node_output_ref("string", false);
+        validate_for_web(&ir).expect("non-optional string code output should pass");
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_without_approval_policy() {
+        let ir = make_ir(
+            vec!["browser.js.sandbox".into()],
+            vec!["browser.js.sandbox"],
+            StageExecution::Tool {
+                capability: "browser.js.sandbox".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Literal {
+                            ty: "string".into(),
+                            value: serde_yaml::Value::String("return { ok: true };".into()),
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "json".into(),
+                            value: serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+
+        let err = validate_for_web(&ir).expect_err("sandbox must require approval policy");
+        assert!(
+            err.iter().any(|e| e.contains("explicit approval policy")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_browser_js_sandbox_in_model_stage() {
+        let ir = make_ir(
+            vec!["browser.js.sandbox".into()],
+            vec!["browser.js.sandbox"],
+            StageExecution::Model,
+        );
+
+        let err = validate_for_web(&ir).expect_err("sandbox must be deterministic-only");
+        assert!(
+            err.iter()
+                .any(|e| e.contains("only allowed in deterministic")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_browser_js_sandbox_approval_policy() {
+        let mut ir = make_ir(vec![], vec![], StageExecution::Model);
+        ir.policies.push(Policy {
+            id: "bad sandbox policy".into(),
+            kind: "before".into(),
+            trigger: Trigger {
+                capability: "browser.js.sandbox".into(),
+                bind: indexmap::IndexMap::new(),
+            },
+            requires: Some(vec![]),
+            condition: None,
+        });
+
+        let err = validate_for_web(&ir).expect_err("malformed sandbox policy must be rejected");
+        assert!(
+            err.iter()
+                .any(|e| e.contains("must approve browser.js.sandbox")),
+            "{err:?}"
+        );
     }
 
     #[test]

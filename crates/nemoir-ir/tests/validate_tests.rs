@@ -25,6 +25,13 @@ fn catalog_get_capability_returns_specs() {
     assert_eq!(spec.required_params[0].name, "command");
     assert_eq!(spec.required_params[0].ty, CapabilityParamType::String);
 
+    let spec = get_capability("browser.js.sandbox").expect("browser.js.sandbox should be known");
+    assert_eq!(spec.required_params.len(), 2);
+    assert_eq!(spec.required_params[0].name, "code");
+    assert_eq!(spec.required_params[0].ty, CapabilityParamType::String);
+    assert_eq!(spec.required_params[1].name, "input");
+    assert_eq!(spec.required_params[1].ty, CapabilityParamType::Json);
+
     assert!(get_capability("made.up").is_none());
     assert!(is_known_capability("fs.read"));
     assert!(!is_known_capability("made.up"));
@@ -46,7 +53,7 @@ fn catalog_fs_write_content_is_string() {
 }
 
 #[test]
-fn catalog_has_exactly_nine_entries() {
+fn catalog_has_exactly_ten_entries() {
     use nemoir_ir::capabilities::get_capability;
     let names = [
         "fs.read",
@@ -58,6 +65,7 @@ fn catalog_has_exactly_nine_entries() {
         "browser.storage.read",
         "browser.storage.write",
         "browser.js.run",
+        "browser.js.sandbox",
     ];
     for name in &names {
         assert!(

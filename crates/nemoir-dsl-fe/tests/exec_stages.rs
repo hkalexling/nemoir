@@ -222,6 +222,84 @@ fn lower_js_run_positive_fixture() {
 }
 
 #[test]
+fn lower_js_sandbox_positive_fixture() {
+    let source = include_str!("fixtures/js_sandbox_positive.nemo");
+    let ir = lower(source, "js_sandbox_positive.nemo").expect("lowering should succeed");
+
+    assert!(ir.capabilities.contains(&"browser.js.sandbox".to_string()));
+    assert!(ir.capabilities.contains(&"user.confirm".to_string()));
+    assert!(ir.policies.iter().any(|policy| {
+        policy.kind == "before"
+            && policy.trigger.capability == "browser.js.sandbox"
+            && policy.trigger.bind.contains_key("code")
+            && policy
+                .requires
+                .as_ref()
+                .is_some_and(|requires| requires.iter().any(|req| req.capability == "user.confirm"))
+    }));
+
+    let run = find_node(&ir, "RunSandbox");
+    assert!(run
+        .requires
+        .iter()
+        .any(|c| c.capability == "browser.js.sandbox"));
+    assert!(run.reads.iter().any(|r| matches!(
+        &r.ref_,
+        Ref::NodeOutput { node, field } if node == "GenerateCode" && field == "code"
+    )));
+
+    match &run.execution {
+        StageExecution::Tool { capability, args } => {
+            assert_eq!(capability, "browser.js.sandbox");
+            match args.get("code").expect("code arg") {
+                Expr::Ref {
+                    r#ref: Ref::NodeOutput { node, field },
+                } => {
+                    assert_eq!(node, "GenerateCode");
+                    assert_eq!(field, "code");
+                }
+                other => panic!("expected model-output code Ref, got {:?}", other),
+            }
+            match args.get("input").expect("input arg") {
+                Expr::Ref {
+                    r#ref: Ref::Input { name },
+                } => assert_eq!(name, "payload"),
+                other => panic!("expected workflow-input JSON Ref, got {:?}", other),
+            }
+        }
+        other => panic!("expected Tool execution, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_js_sandbox_user_code_fixture() {
+    let source = include_str!("fixtures/js_sandbox_user_code.nemo");
+    let ir = lower(source, "js_sandbox_user_code.nemo").expect("lowering should succeed");
+
+    assert_eq!(ir.workflow.entry, "RunSandbox");
+    assert_eq!(ir.workflow.exits, vec!["RunSandbox"]);
+    let run = find_node(&ir, "RunSandbox");
+    match &run.execution {
+        StageExecution::Tool { capability, args } => {
+            assert_eq!(capability, "browser.js.sandbox");
+            match args.get("code").expect("code arg") {
+                Expr::Ref {
+                    r#ref: Ref::Input { name },
+                } => assert_eq!(name, "code"),
+                other => panic!("expected user-code input Ref, got {:?}", other),
+            }
+            match args.get("input").expect("input arg") {
+                Expr::Ref {
+                    r#ref: Ref::Input { name },
+                } => assert_eq!(name, "payload"),
+                other => panic!("expected payload input Ref, got {:?}", other),
+            }
+        }
+        other => panic!("expected Tool execution, got {:?}", other),
+    }
+}
+
+#[test]
 fn lower_http_fetch_fixture() {
     let source = include_str!("fixtures/http_fetch.nemo");
     let ir = lower(source, "http_fetch.nemo").expect("lowering should succeed");

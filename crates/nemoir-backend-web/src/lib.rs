@@ -92,7 +92,7 @@ pub fn generate_package(
 
     // 4. Emit files.
     let version = options.package_version.as_deref().unwrap_or("0.1.0");
-    let runtime_dep = options.runtime_dependency.as_deref().unwrap_or("^0.2.0");
+    let runtime_dep = options.runtime_dependency.as_deref().unwrap_or("^0.3.1");
     let files = translate::build_files(ir, &package_name, version, runtime_dep)?;
 
     Ok(GeneratedPackage {

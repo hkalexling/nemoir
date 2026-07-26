@@ -129,6 +129,14 @@ const BROWSER_JS_RUN_PARAMS: &[CapabilityParam] = &[
     CapabilityParam::required("input", CapabilityParamType::Json),
 ];
 
+// Dynamic source for this capability is intentionally handled only by the
+// web target's opaque-origin sandbox. Unlike `browser.js.run`, its `code`
+// argument may be a workflow input or a prior stage output.
+const BROWSER_JS_SANDBOX_PARAMS: &[CapabilityParam] = &[
+    CapabilityParam::required("code", CapabilityParamType::String),
+    CapabilityParam::required("input", CapabilityParamType::Json),
+];
+
 pub const HTTP_FETCH: CapabilitySpec = CapabilitySpec {
     name: "http.fetch",
     required_params: HTTP_FETCH_PARAMS,
@@ -149,6 +157,11 @@ pub const BROWSER_JS_RUN: CapabilitySpec = CapabilitySpec {
     required_params: BROWSER_JS_RUN_PARAMS,
 };
 
+pub const BROWSER_JS_SANDBOX: CapabilitySpec = CapabilitySpec {
+    name: "browser.js.sandbox",
+    required_params: BROWSER_JS_SANDBOX_PARAMS,
+};
+
 pub fn get_capability(name: &str) -> Option<&'static CapabilitySpec> {
     match name {
         "fs.read" => Some(&FS_READ),
@@ -160,6 +173,7 @@ pub fn get_capability(name: &str) -> Option<&'static CapabilitySpec> {
         "browser.storage.read" => Some(&BROWSER_STORAGE_READ),
         "browser.storage.write" => Some(&BROWSER_STORAGE_WRITE),
         "browser.js.run" => Some(&BROWSER_JS_RUN),
+        "browser.js.sandbox" => Some(&BROWSER_JS_SANDBOX),
         _ => None,
     }
 }
