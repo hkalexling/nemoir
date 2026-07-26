@@ -241,8 +241,8 @@ The dev server serves cross-origin isolation headers (COOP/COEP).\n\n\
   insufficient. Free browser storage or choose a smaller model. Cached models\n\
   never warn. For deterministic-only workflows this section does not apply.\n\n\
 ## Building against a local runtime checkout\n\n\
-`@nemoir/web-runtime` is published to npm (>= 0.2.0). During development, point\n\
-the compile step at a local checkout so `npm install` resolves:\n\n\
+`@nemoir/web-runtime` is published to npm (>= 0.2.0), so `npm install` resolves it\n\
+directly. To build against an in-repo checkout during development, point the compile step at it:\n\n\
 ```bash\n\
 nemo compile <file>.nemo --target web \\
 \
