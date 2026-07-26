@@ -43,6 +43,8 @@ pub enum BaseType {
     Bool,
     Path,
     Number,
+    /// JSON-safe value: any value round-trippable through JSON.
+    Json,
     Unknown,
 }
 
@@ -53,6 +55,7 @@ impl BaseType {
             BaseType::Bool => "bool",
             BaseType::Path => "path",
             BaseType::Number => "number",
+            BaseType::Json => "json",
             BaseType::Unknown => "unknown",
         }
     }
@@ -63,6 +66,7 @@ impl BaseType {
             "bool" => BaseType::Bool,
             "path" => BaseType::Path,
             "number" => BaseType::Number,
+            "json" => BaseType::Json,
             _ => BaseType::Unknown,
         }
     }
@@ -227,6 +231,14 @@ pub enum ExecValue {
     Ref(StageInputRef),
     InputRef(Ident),
     String(Spanned<String>),
+    /// Multi-line string literal (code blocks, etc.). Content is preserved
+    /// verbatim — no dedent/trim like prompts. The `"""` delimiters are
+    /// stripped; interior content is passed through unchanged.
+    MultilineString(Spanned<String>),
+    /// Structured JSON literal (`json`-typed exec params). Parsed from the
+    /// `json_value` grammar rule into a `serde_json::Value` so the runtime
+    /// receives a structured value rather than an ad-hoc string.
+    Json(Spanned<serde_json::Value>),
 }
 
 #[derive(Debug, Clone)]

@@ -111,8 +111,8 @@ fn validate_exec(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic
                 }));
             }
             seen_params.insert(arg.name.text.as_str());
-            // Must be a required param of the capability
-            if !spec.has_required_param(&arg.name.text) {
+            // Must be a known param of the capability (required or optional)
+            if !spec.has_param(&arg.name.text) {
                 return Err(Diagnostic::NameError(NameError {
                     message: format!(
                         "unknown exec arg `{}` for capability `{}` in stage `{}`",
@@ -123,7 +123,7 @@ fn validate_exec(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic
                         arg.name.span.start,
                         arg.name.span.end,
                         format!(
-                            "`{}` is not a required parameter of `{}`",
+                            "`{}` is not a parameter of `{}`",
                             arg.name.text, exec.capability.text
                         ),
                     )),
@@ -153,14 +153,15 @@ fn validate_exec(rw: &ResolvedWorkflow, filename: &str) -> Result<(), Diagnostic
                         }));
                     }
                 }
-                ExecValue::String(_) => {
-                    // String literal — always valid
+                ExecValue::String(_) | ExecValue::MultilineString(_) | ExecValue::Json(_) => {
+                    // Literals — always valid (the parser already rejected
+                    // malformed JSON, so a Json variant is well-formed).
                 }
             }
         }
-        // All required catalog params must be provided
+        // All required catalog params must be provided (optional params may be omitted)
         for param in spec.required_params {
-            if !seen_params.contains(param.name) {
+            if param.required && !seen_params.contains(param.name) {
                 return Err(Diagnostic::NameError(NameError {
                     message: format!(
                         "missing required exec arg `{}` for capability `{}` in stage `{}`",
@@ -486,6 +487,7 @@ fn validate_policy_expr(
                         // Plan §5: bool and unknown receiver types are unsupported.
                         Some(BaseType::Bool)
                         | Some(BaseType::Number)
+                        | Some(BaseType::Json)
                         | Some(BaseType::Unknown)
                         | None => {
                             return Err(Diagnostic::TypeError(TypeError {
@@ -834,6 +836,7 @@ fn policy_expr_value_type(
                         nemoir_ir::capabilities::CapabilityParamType::String => BaseType::String,
                         nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
                         nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+                        nemoir_ir::capabilities::CapabilityParamType::Json => BaseType::Json,
                     }
                 })
             } else {
@@ -861,6 +864,7 @@ fn infer_receiver_type(
             nemoir_ir::capabilities::CapabilityParamType::String => BaseType::String,
             nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
             nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+            nemoir_ir::capabilities::CapabilityParamType::Json => BaseType::Json,
         })
     } else {
         None
@@ -904,6 +908,7 @@ fn type_of_policy_expr(
                             }
                             nemoir_ir::capabilities::CapabilityParamType::Path => BaseType::Path,
                             nemoir_ir::capabilities::CapabilityParamType::Bool => BaseType::Bool,
+                            nemoir_ir::capabilities::CapabilityParamType::Json => BaseType::Json,
                         }
                     })
                 } else {
@@ -920,6 +925,7 @@ fn policy_expr_type_name(ty: Option<BaseType>) -> &'static str {
         Some(BaseType::String) => "string",
         Some(BaseType::Path) => "path",
         Some(BaseType::Number) => "number",
+        Some(BaseType::Json) => "json",
         Some(BaseType::Unknown) => "unknown",
         None => "unknown",
     }

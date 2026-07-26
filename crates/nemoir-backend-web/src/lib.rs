@@ -4,8 +4,7 @@
 //! Mirrors `nemoir-backend-python` in API shape and pipeline:
 //!   `validate(ir)?` → `validate_for_web(ir)?` → derive package dir → emit files.
 //!
-//! The generated app loads WebLLM in a Web Worker (or calls a cloud proxy)
-//! and runs the workflow entirely in the browser. The compile-time web
+//! The generated app loads WebLLM in a Web Worker and runs the workflow
 //! capability contract (`validate_for_web`) is the core product guarantee:
 //! the compiler rejects workflows that require capabilities the browser
 //! cannot provide (`fs.*`, `os.shell`, `path` types, deterministic stages).
@@ -93,7 +92,7 @@ pub fn generate_package(
 
     // 4. Emit files.
     let version = options.package_version.as_deref().unwrap_or("0.1.0");
-    let runtime_dep = options.runtime_dependency.as_deref().unwrap_or("^0.1.0");
+    let runtime_dep = options.runtime_dependency.as_deref().unwrap_or("^0.2.0");
     let files = translate::build_files(ir, &package_name, version, runtime_dep)?;
 
     Ok(GeneratedPackage {

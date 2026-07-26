@@ -46,7 +46,7 @@ fn catalog_fs_write_content_is_string() {
 }
 
 #[test]
-fn catalog_has_exactly_five_entries() {
+fn catalog_has_exactly_nine_entries() {
     use nemoir_ir::capabilities::get_capability;
     let names = [
         "fs.read",
@@ -54,6 +54,10 @@ fn catalog_has_exactly_five_entries() {
         "os.shell",
         "user.elicit",
         "user.confirm",
+        "http.fetch",
+        "browser.storage.read",
+        "browser.storage.write",
+        "browser.js.run",
     ];
     for name in &names {
         assert!(

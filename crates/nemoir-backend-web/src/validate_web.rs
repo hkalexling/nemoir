@@ -6,13 +6,40 @@
 
 use nemoir_ir::{StageExecution, WorkflowIr};
 
-/// Capabilities the web MVP supports. Everything else is a compile-time
-/// error for `--target web`.
-const WEB_ALLOWED_CAPABILITIES: &[&str] = &["user.elicit", "user.confirm"];
+/// Capabilities the web target supports (including deterministic-only ones).
+/// Everything else is a compile-time error for `--target web`.
+const WEB_ALLOWED_CAPABILITIES: &[&str] = &[
+    "user.elicit",
+    "user.confirm",
+    "http.fetch",
+    "browser.storage.read",
+    "browser.storage.write",
+    "browser.js.run",
+];
+
+/// Capabilities the web target supports for deterministic (`exec:`) stages.
+const WEB_DETERMINISTIC_CAPABILITIES: &[&str] = &[
+    "user.elicit",
+    "user.confirm",
+    "http.fetch",
+    "browser.storage.read",
+    "browser.storage.write",
+    "browser.js.run",
+];
+
+/// Capabilities that are ONLY allowed in deterministic stages, not as
+/// model-stage `requires` or policy triggers/requires.
+const WEB_DETERMINISTIC_ONLY_CAPABILITIES: &[&str] = &["browser.js.run"];
 
 /// Check a capability name against the web allowlist.
 fn is_web_allowed(capability: &str) -> bool {
     WEB_ALLOWED_CAPABILITIES.contains(&capability)
+}
+
+/// Check whether a capability is deterministic-only (not usable in
+/// model stages or policies).
+fn is_deterministic_only(capability: &str) -> bool {
+    WEB_DETERMINISTIC_ONLY_CAPABILITIES.contains(&capability)
 }
 
 /// Check whether an IR type string references the `path` type.
@@ -68,7 +95,7 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
             }
         }
 
-        // Requires: only user.elicit / user.confirm
+        // Requires: only web-allowed capabilities
         for cap in &node.requires {
             if !is_web_allowed(&cap.capability) {
                 errors.push(format!(
@@ -76,14 +103,43 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                     node.id, cap.capability
                 ));
             }
+            // browser.js.run is deterministic-only — reject in model stage requires
+            if WEB_DETERMINISTIC_ONLY_CAPABILITIES.contains(&cap.capability.as_str())
+                && matches!(node.execution, StageExecution::Model)
+            {
+                errors.push(format!(
+                    "web-target-error: stage \"{}\" requires capability \"{}\" which is only allowed in deterministic (exec:) stages",
+                    node.id, cap.capability
+                ));
+            }
         }
 
-        // Deterministic (exec:) stages: unsupported in the MVP
-        if !matches!(node.execution, StageExecution::Model) {
-            errors.push(format!(
-                "web-target-error: deterministic stage \"{}\" cannot run on the web target (exec stages are unsupported in the MVP)",
-                node.id
-            ));
+        // Deterministic (exec:) stages: allowed only for browser-supported capabilities
+        if let StageExecution::Tool { capability, args } = &node.execution {
+            if !WEB_DETERMINISTIC_CAPABILITIES.contains(&capability.as_str()) {
+                errors.push(format!(
+                    "web-target-error: deterministic stage \"{}\" uses capability \"{}\" which is not supported on the web target",
+                    node.id, capability
+                ));
+            }
+            // browser.js.run code must be a compile-time string literal —
+            // it executes trusted workflow-author code, never model- or
+            // input-derived JavaScript.
+            if capability == "browser.js.run" {
+                if let Some(code_expr) = args.get("code") {
+                    if !matches!(code_expr, nemoir_ir::Expr::Literal { ty, .. } if ty == "string") {
+                        errors.push(format!(
+                            "web-target-error: deterministic stage \"{}\" (capability browser.js.run) requires a literal string for the 'code' argument; input/output refs are not allowed",
+                            node.id
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "web-target-error: deterministic stage \"{}\" (capability browser.js.run) is missing the required 'code' argument",
+                        node.id
+                    ));
+                }
+            }
         }
     }
 
@@ -96,12 +152,25 @@ pub fn validate_for_web(ir: &WorkflowIr) -> Result<(), Vec<String>> {
                 policy.id, policy.trigger.capability
             ));
         }
+        // Deterministic-only capabilities cannot be used in policies
+        if is_deterministic_only(&policy.trigger.capability) {
+            errors.push(format!(
+                "web-target-error: policy \"{}\" triggers capability \"{}\" which is deterministic-stage-only and cannot be used in policies",
+                policy.id, policy.trigger.capability
+            ));
+        }
         // Before-policy required capabilities
         if let Some(requires) = &policy.requires {
             for req in requires {
                 if !is_web_allowed(&req.capability) {
                     errors.push(format!(
                         "web-target-error: policy \"{}\" requires unsupported capability \"{}\"",
+                        policy.id, req.capability
+                    ));
+                }
+                if is_deterministic_only(&req.capability) {
+                    errors.push(format!(
+                        "web-target-error: policy \"{}\" requires capability \"{}\" which is deterministic-stage-only and cannot be used in policies",
                         policy.id, req.capability
                     ));
                 }
@@ -231,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_deterministic_tool_stage() {
+    fn allows_deterministic_tool_stage_with_user_confirm() {
         let ir = make_ir(
             vec!["user.confirm".into()],
             vec!["user.confirm"],
@@ -250,11 +319,31 @@ mod tests {
                 },
             },
         );
-        let err = validate_for_web(&ir).expect_err("tool stage should be rejected");
-        assert!(
-            err.iter().any(|e| e.contains("deterministic stage")),
-            "{err:?}"
+        validate_for_web(&ir).expect("deterministic user.confirm should be allowed on web");
+    }
+
+    #[test]
+    fn rejects_deterministic_tool_stage_with_unsupported_capability() {
+        let ir = make_ir(
+            vec!["fs.read".into()],
+            vec!["fs.read"],
+            StageExecution::Tool {
+                capability: "fs.read".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "path".into(),
+                        Expr::Literal {
+                            ty: "string".into(),
+                            value: serde_yaml::Value::String("test.txt".into()),
+                        },
+                    );
+                    m
+                },
+            },
         );
+        let err = validate_for_web(&ir).expect_err("fs.read tool stage should be rejected");
+        assert!(err.iter().any(|e| e.contains("fs.read")), "{err:?}");
     }
 
     #[test]
@@ -312,5 +401,72 @@ mod tests {
             optional: false,
         }];
         validate_for_web(&ir).expect("number types should be allowed on web");
+    }
+
+    #[test]
+    fn rejects_browser_js_run_with_ref_code() {
+        // browser.js.run requires code to be a compile-time string literal —
+        // input/output refs are not allowed for code.
+        let ir = make_ir(
+            vec!["browser.js.run".into()],
+            vec!["browser.js.run"],
+            StageExecution::Tool {
+                capability: "browser.js.run".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Ref {
+                            r#ref: nemoir_ir::Ref::NodeOutput {
+                                node: "SomeStage".into(),
+                                field: "generated".into(),
+                            },
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "string".into(),
+                            value: serde_yaml::Value::String("{}".into()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+        let err = validate_for_web(&ir).expect_err("ref code should be rejected");
+        assert!(err.iter().any(|e| e.contains("literal string")), "{err:?}");
+    }
+
+    #[test]
+    fn allows_browser_js_run_with_literal_code() {
+        let ir = make_ir(
+            vec!["browser.js.run".into()],
+            vec!["browser.js.run"],
+            StageExecution::Tool {
+                capability: "browser.js.run".into(),
+                args: {
+                    let mut m = indexmap::IndexMap::new();
+                    m.insert(
+                        "code".into(),
+                        Expr::Literal {
+                            ty: "string".into(),
+                            value: serde_yaml::Value::String(
+                                "return { result: input.x + input.y };".into(),
+                            ),
+                        },
+                    );
+                    m.insert(
+                        "input".into(),
+                        Expr::Literal {
+                            ty: "string".into(),
+                            value: serde_yaml::Value::String("{}".into()),
+                        },
+                    );
+                    m
+                },
+            },
+        );
+        validate_for_web(&ir).expect("literal code should be allowed");
     }
 }

@@ -1039,7 +1039,7 @@ fn validate_stage_execution(
     for (arg_name, arg_expr) in args {
         seen_params.insert(arg_name.as_str());
 
-        if !spec.has_required_param(arg_name) {
+        if !spec.has_param(arg_name) {
             errors.push(
                 format!("nodes.{}.execution.args.{}", node.id, arg_name),
                 format!(
@@ -1061,7 +1061,7 @@ fn validate_stage_execution(
     }
 
     for param in spec.required_params {
-        if !seen_params.contains(param.name) {
+        if param.required && !seen_params.contains(param.name) {
             errors.push(
                 format!("nodes.{}.execution", node.id),
                 format!(
@@ -1794,6 +1794,7 @@ fn policy_expr_type(
                         crate::capabilities::CapabilityParamType::String => "string".to_string(),
                         crate::capabilities::CapabilityParamType::Path => "path".to_string(),
                         crate::capabilities::CapabilityParamType::Bool => "bool".to_string(),
+                        crate::capabilities::CapabilityParamType::Json => "json".to_string(),
                     })
                 } else {
                     None

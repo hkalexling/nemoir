@@ -487,10 +487,25 @@ fn lower_node(
                         name: id.text.clone(),
                     },
                 },
-                ExecValue::String(s) => Expr::Literal {
+                ExecValue::String(s) | ExecValue::MultilineString(s) => Expr::Literal {
                     ty: "string".to_string(),
                     value: serde_yaml::Value::String(s.value.clone()),
                 },
+                ExecValue::Json(v) => {
+                    // Convert the parsed JSON value into serde_yaml's Value
+                    // (which the IR's Expr::Literal carries). serde_json and
+                    // serde_yaml share the same shape (Number/String/Bool/
+                    // Null/Array/Mapping), so a round-trip preserves the
+                    // structure exactly.
+                    let yaml_value: serde_yaml::Value = serde_json::from_value(
+                        serde_json::Value::clone(&v.value),
+                    )
+                    .expect("serde_json -> serde_yaml conversion is infallible for JSON values");
+                    Expr::Literal {
+                        ty: "json".to_string(),
+                        value: yaml_value,
+                    }
+                }
             };
             args.insert(arg.name.text.clone(), value);
         }

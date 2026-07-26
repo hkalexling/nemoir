@@ -21,6 +21,30 @@ fn hint_tutor_path() -> String {
     .to_string()
 }
 
+fn http_fetch_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/http_fetch.nemo"
+    )
+    .to_string()
+}
+
+fn js_run_model_stage_err_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/js_run_model_stage_err.nemo"
+    )
+    .to_string()
+}
+
+fn js_run_positive_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nemoir-dsl-fe/tests/fixtures/js_run_positive.nemo"
+    )
+    .to_string()
+}
+
 fn dup_stage_path() -> String {
     concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -727,6 +751,137 @@ fn cli_compile_web_hint_tutor_positive() {
     assert!(
         agent.contains("key_points: string[]"),
         "agent.ts should have typed key_points output"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_http_fetch_positive() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_http_fetch");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(http_fetch_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile http_fetch --target web");
+
+    assert!(
+        output.status.success(),
+        "http_fetch should compile on web target"
+    );
+
+    let pkg = out_dir.join("http-fetch-demo");
+    assert!(
+        pkg.join("package.json").exists(),
+        "http-fetch-demo package.json should exist"
+    );
+    assert!(
+        pkg.join("src").join("agent.ts").exists(),
+        "http-fetch-demo src/agent.ts should exist"
+    );
+    assert!(
+        pkg.join("src").join("workflow.json").exists(),
+        "http-fetch-demo src/workflow.json should exist"
+    );
+
+    let wf_json = std::fs::read_to_string(pkg.join("src").join("workflow.json"))
+        .expect("should read workflow.json");
+    assert!(
+        wf_json.contains("HttpFetchDemo"),
+        "workflow.json should contain workflow id"
+    );
+    assert!(
+        wf_json.contains("http.fetch"),
+        "workflow.json should carry the http.fetch capability"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_js_run_model_stage_negative() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_js_run_neg");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(js_run_model_stage_err_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile js_run_model_stage_err --target web");
+
+    assert!(
+        !output.status.success(),
+        "browser.js.run in model-stage requires must fail on web target"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("browser.js.run"),
+        "should mention browser.js.run: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("deterministic"),
+        "should mention deterministic-only: {stderr}"
+    );
+
+    // No output directory should have been created.
+    assert!(
+        !out_dir.join("js-run-model-err").exists(),
+        "web backend must not write files on validation failure"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_js_run_positive() {
+    // Medium #3: a positive compile + codegen test for `browser.js.run`.
+    // Verifies the generated app carries the js.worker.ts asset and
+    // HAS_JS_RUN plumbing (only present when the workflow uses js.run).
+    let out_dir = std::env::temp_dir().join("nemoir_web_js_run_pos");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(js_run_positive_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile js_run_positive --target web");
+
+    assert!(
+        output.status.success(),
+        "js_run_positive should compile on web target"
+    );
+
+    let pkg = out_dir.join("js-run-positive");
+    assert!(
+        pkg.join("src").join("js.worker.ts").exists(),
+        "js-run-positive should emit src/js.worker.ts (HAS_JS_RUN path)"
+    );
+    let agent_ts =
+        std::fs::read_to_string(pkg.join("src").join("agent.ts")).expect("should read agent.ts");
+    assert!(
+        agent_ts.contains("HAS_JS_RUN = true"),
+        "agent.ts should declare HAS_JS_RUN = true: {agent_ts}"
+    );
+    assert!(
+        agent_ts.contains("browser.js.run"),
+        "agent.ts REQUIRED_CAPABILITIES should list browser.js.run: {agent_ts}"
     );
 
     let _ = std::fs::remove_dir_all(&out_dir);

@@ -717,17 +717,30 @@ fn parse_exec_arg(pair: pest::iterators::Pair<Rule>) -> ExecArg {
 }
 
 fn parse_exec_value(pair: pest::iterators::Pair<Rule>) -> ExecValue {
-    // exec_value = { single_line_string | ident ~ ("." ~ ident)? }
-    // Children are flattened: single_line_string OR ident [ident]
-    // (the "." is a silent literal and produces no pair)
+    // exec_value = { multiline_string | single_line_string | json_value | ident ~ ("." ~ ident)? }
     let mut inner = pair.into_inner();
     let first = inner.next().expect("exec value first token");
     match first.as_rule() {
+        Rule::multiline_string => {
+            let raw = first.as_str();
+            let processed = process_exec_multiline_string(raw);
+            let span = span_from_pair(&first);
+            ExecValue::MultilineString(Spanned::new(processed, span))
+        }
         Rule::single_line_string => {
             let raw = first.as_str();
             let processed = process_policy_string_literal(raw);
             let span = span_from_pair(&first);
             ExecValue::String(Spanned::new(processed, span))
+        }
+        Rule::json_value => {
+            let span = span_from_pair(&first);
+            // Parse the literal's source text into a serde_json::Value. The
+            // grammar guarantees this is well-formed JSON, so a parse error
+            // is an internal-consistency bug rather than a user error.
+            let value: serde_json::Value = serde_json::from_str(first.as_str())
+                .expect("json_value rule produced unparseable JSON");
+            ExecValue::Json(Spanned::new(value, span))
         }
         Rule::ident => {
             let first_ident = parse_ident(first);
@@ -747,7 +760,7 @@ fn parse_exec_value(pair: pest::iterators::Pair<Rule>) -> ExecValue {
             }
         }
         _ => {
-            // Should be unreachable — grammar guarantees single_line_string or ident
+            // Should be unreachable — grammar guarantees one of the above
             let span = span_from_pair(&first);
             ExecValue::InputRef(Ident {
                 text: String::new(),
@@ -798,4 +811,18 @@ pub fn process_policy_string_literal(raw: &str) -> String {
     debug_assert!(raw.starts_with('"') && raw.ends_with('"'));
     let inner = &raw[1..raw.len() - 1];
     inner.replace("\\\"", "\"")
+}
+
+/// Process a multi-line string literal for exec contexts.
+///
+/// Unlike `process_string`, this preserves the content **verbatim** —
+/// no dedent, no trim. The `"""` delimiters are stripped; interior
+/// content (including leading/trailing whitespace on each line) is
+/// passed through unchanged. This is the right behavior for code
+/// blocks (`browser.js.run(code: """...""")`) where formatting matters.
+pub fn process_exec_multiline_string(raw: &str) -> String {
+    debug_assert!(raw.starts_with("\"\"\"") && raw.ends_with("\"\"\""));
+    let inner = &raw[3..raw.len() - 3];
+    // Preserve content verbatim — just strip the delimiters.
+    inner.to_string()
 }

@@ -162,7 +162,19 @@ exec_decl = {
 
 exec_arg_list = { exec_arg ~ ("," ~ exec_arg)* }
 exec_arg = { ident ~ ":" ~ exec_value }
-exec_value = { single_line_string | ident ~ ("." ~ ident)? }
+exec_value = { multiline_string | single_line_string | json_value | ident ~ ("." ~ ident)? }
+
+// Structured JSON literals for `json`-typed exec params (headers, bodies,
+// storage values, JS inputs). Mirrors JSON's grammar recursively; pest's
+// silent WHITESPACE rule handles intra-structure spacing.
+json_value   = _{ json_object | json_array | json_string | json_number | json_bool | json_null }
+json_object  = { "{" ~ json_member? ~ ("," ~ json_member)* ~ "}" }
+json_member  = { json_string ~ ":" ~ json_value }
+json_array   = { "[" ~ json_value? ~ ("," ~ json_value)* ~ "]" }
+json_string  = @{ "\"" ~ ( "\\\"" | !("\"" | "\\") ~ ANY )* ~ "\"" }
+json_number  = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+json_bool    = { "true" | "false" }
+json_null    = { "null" }
 
 string = { multiline_string | single_line_string }
 

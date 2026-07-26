@@ -1,0 +1,17 @@
+workflow HttpFetchDemo {
+  stage @entry Fetch {
+    exec: http.fetch(url: "https://example.com", method: "GET")
+    output: {
+      ok: bool { true => Done false => Done }
+      status: number
+      body: json
+    }
+  }
+
+  stage @exit Done {
+    prompt: "Fetch result: ok=@Fetch.ok, status=@Fetch.status"
+    output: {
+      summary: string
+    }
+  }
+}

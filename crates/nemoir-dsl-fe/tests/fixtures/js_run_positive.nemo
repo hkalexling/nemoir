@@ -1,0 +1,22 @@
+workflow JsRunPositive {
+  input { x: json }
+
+  stage @entry Compute {
+    exec: browser.js.run(
+      code: """
+      return { result: input.x + 1 }
+      """,
+      input: x
+    )
+    output: {
+      result: number
+    }
+  }
+
+  stage @exit Done {
+    prompt: "Computed: @Compute.result"
+    output: {
+      summary: string
+    }
+  }
+}

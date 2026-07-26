@@ -12,4 +12,5 @@ thiserror = "2"
 indexmap = "2"
 serde_yaml = "0.9"
 strsim = "0.11"
+serde_json = "1"
 nemoir-ir = { path = "../nemoir-ir" }

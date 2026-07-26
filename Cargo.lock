@@ -376,6 +376,7 @@ dependencies = [
  "nemoir-ir",
  "pest",
  "pest_derive",
+ "serde_json",
  "serde_yaml",
  "strsim",
  "thiserror",

@@ -30,8 +30,7 @@ enum Command {
 
         /// Override the `@nemoir/web-runtime` dependency spec in the generated
         /// `package.json` (web target only). Example: `file:../../web/nemoir-runtime`.
-        /// Until `@nemoir/web-runtime` is published to npm, point this at a local
-        /// checkout so the generated app can `npm install`.
+        /// Use this to point at a local runtime checkout during development.
         #[arg(long)]
         web_runtime_dependency: Option<String>,
     },

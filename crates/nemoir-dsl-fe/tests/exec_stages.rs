@@ -173,3 +173,91 @@ fn lower_exec_with_prompt_fixture() {
         other => panic!("expected Tool execution, got {:?}", other),
     }
 }
+
+#[test]
+fn lower_js_run_positive_fixture() {
+    let source = include_str!("fixtures/js_run_positive.nemo");
+    let ir = lower(source, "js_run_positive.nemo").expect("lowering should succeed");
+
+    assert!(ir.capabilities.contains(&"browser.js.run".to_string()));
+
+    let compute = find_node(&ir, "Compute");
+    assert_eq!(compute.prompt, ""); // deterministic, prompt omitted
+    assert!(compute
+        .requires
+        .iter()
+        .any(|c| c.capability == "browser.js.run"));
+
+    match &compute.execution {
+        StageExecution::Tool { capability, args } => {
+            assert_eq!(capability, "browser.js.run");
+            assert_eq!(args.len(), 2);
+
+            // code: a multiline-string-literal lowered to a string Literal.
+            let code_value = args.get("code").expect("code arg");
+            match code_value {
+                Expr::Literal { ty, value } => {
+                    assert_eq!(ty, "string");
+                    // The multiline body is preserved verbatim (trimmed).
+                    assert!(value
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("return { result: input.x + 1 }"));
+                }
+                other => panic!("expected Literal for code, got {:?}", other),
+            }
+
+            // input: a Ref::Input { name: "x" }.
+            let input_value = args.get("input").expect("input arg");
+            match input_value {
+                Expr::Ref { r#ref } => match r#ref {
+                    Ref::Input { name } => assert_eq!(name, "x"),
+                    other => panic!("expected Input ref for input, got {:?}", other),
+                },
+                other => panic!("expected Ref for input, got {:?}", other),
+            }
+        }
+        other => panic!("expected Tool execution, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_http_fetch_fixture() {
+    let source = include_str!("fixtures/http_fetch.nemo");
+    let ir = lower(source, "http_fetch.nemo").expect("lowering should succeed");
+
+    assert!(ir.capabilities.contains(&"http.fetch".to_string()));
+
+    let fetch_node = find_node(&ir, "Fetch");
+    assert_eq!(fetch_node.prompt, ""); // deterministic, prompt omitted
+    assert!(fetch_node
+        .requires
+        .iter()
+        .any(|c| c.capability == "http.fetch"));
+
+    match &fetch_node.execution {
+        StageExecution::Tool { capability, args } => {
+            assert_eq!(capability, "http.fetch");
+            assert_eq!(args.len(), 2);
+
+            let url_value = args.get("url").expect("url arg");
+            match url_value {
+                Expr::Literal { ty, value } => {
+                    assert_eq!(ty, "string");
+                    assert_eq!(value.as_str(), Some("https://example.com"));
+                }
+                other => panic!("expected Literal for url, got {:?}", other),
+            }
+
+            let method_value = args.get("method").expect("method arg");
+            match method_value {
+                Expr::Literal { ty, value } => {
+                    assert_eq!(ty, "string");
+                    assert_eq!(value.as_str(), Some("GET"));
+                }
+                other => panic!("expected Literal for method, got {:?}", other),
+            }
+        }
+        other => panic!("expected Tool execution, got {:?}", other),
+    }
+}

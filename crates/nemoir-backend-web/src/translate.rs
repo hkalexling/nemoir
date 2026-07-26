@@ -23,12 +23,20 @@ pub fn emit_workflow_json(ir: &WorkflowIr) -> Result<String, WebBackendError> {
     serde_json::to_string_pretty(ir).map_err(|e| WebBackendError::JsonSerialization(e.to_string()))
 }
 
+/// Check whether an IR contains any `browser.js.run` exec stage.
+pub fn has_js_run_stage(ir: &nemoir_ir::WorkflowIr) -> bool {
+    ir.nodes.iter().any(|n| {
+        matches!(&n.execution, nemoir_ir::StageExecution::Tool { capability, .. } if capability == "browser.js.run")
+    })
+}
+
 /// Map an IR type string to a TypeScript type.
 fn ir_type_to_ts(ty: &str) -> &'static str {
     match ty {
         "string" => "string",
         "bool" => "boolean",
         "number" => "number",
+        "json" => "unknown",
         // `path` is rejected by validate_for_web, but map defensively.
         "path" => "string",
         "string[]" => "string[]",
@@ -158,6 +166,18 @@ pub fn emit_agent_ts(ir: &WorkflowIr) -> Result<String, WebBackendError> {
         .collect();
     let exits_str = exits.join(", ");
 
+    // Detect whether the workflow contains any model stages.
+    let has_model_stages = ir
+        .nodes
+        .iter()
+        .any(|n| matches!(n.execution, nemoir_ir::StageExecution::Model));
+    let has_model_stages_str = if has_model_stages { "true" } else { "false" };
+
+    // Detect whether the workflow uses browser.js.run, so the generated
+    // runner only emits (and imports) the js.worker.ts asset when needed.
+    let has_js_run = has_js_run_stage(ir);
+    let has_js_run_str = if has_js_run { "true" } else { "false" };
+
     // Required capabilities
     let caps: Vec<String> = ir
         .capabilities
@@ -180,6 +200,7 @@ pub fn emit_agent_ts(ir: &WorkflowIr) -> Result<String, WebBackendError> {
 
 import {{
   WorkflowAgent,
+  type BrowserToolsOptions,
   type RunOptions,
   type WorkflowEvent,
   type ModelAdapter,
@@ -194,6 +215,8 @@ export const WORKFLOW_ID = `{workflow_id_escaped}` as const;
 export const ENTRY_STAGE_ID = `{entry_escaped}` as const;
 export const EXIT_STAGE_IDS = [{exits_str}] as const;
 export const REQUIRED_CAPABILITIES = [{caps_str}] as const;
+export const HAS_MODEL_STAGES = {has_model_stages_str} as const;
+export const HAS_JS_RUN = {has_js_run_str} as const;
 
 export interface AgentInput {{
 {input_fields}}}
@@ -207,14 +230,21 @@ export interface AgentResult {{
 
 export interface AgentOptions {{
   /**
-   * Model adapter (required for execution). Pass a WebLLM adapter from
-   * `./webllm` or a cloud adapter, or a fake for tests.
+   * Model adapter. Required for workflows with model stages; optional for
+   * deterministic-only workflows. Pass a WebLLM adapter via
+   * `createWebllmAdapter`, or inject a fake adapter for tests.
    */
   modelAdapter?: ModelAdapter | ModelRouter;
   /** Tool registry. Merged with built-in UI-host tools. */
   tools?: ToolRegistry | Iterable<Tool>;
   /** UI host for browser-safe capabilities (user.elicit / user.confirm). */
   uiHost?: WebUiHost;
+  /**
+   * Options for browser-native tools (http.fetch, browser.storage.*,
+   * browser.js.run). Pass `jsWorkerFactory` when the workflow uses
+   * `browser.js.run`.
+   */
+  browserTools?: BrowserToolsOptions;
   /** Default run options (can be overridden per run). */
   defaults?: Partial<RunOptions>;
   /**
@@ -239,7 +269,7 @@ export class Agent {{
   constructor(private readonly opts: AgentOptions) {{}}
 
   private createAgent(actionProtocol?: "native" | "tagged_envelope"): WorkflowAgent {{
-    if (!this.opts.modelAdapter) {{
+    if (HAS_MODEL_STAGES && !this.opts.modelAdapter) {{
       throw new Error(
         "Agent requires a modelAdapter. Pass a WebLLM adapter (`createWebllmAdapter` " +
         "from `./webllm`) or another ModelAdapter via AgentOptions.",
@@ -249,6 +279,7 @@ export class Agent {{
       modelAdapter: this.opts.modelAdapter,
       tools: this.opts.tools,
       uiHost: this.opts.uiHost,
+      browserTools: this.opts.browserTools,
       defaults: this.opts.defaults,
       actionProtocol: actionProtocol ?? this.opts.actionProtocol ?? "tagged_envelope",
     }});
@@ -273,6 +304,8 @@ export class Agent {{
         entry_escaped = entry_escaped,
         exits_str = exits_str,
         caps_str = caps_str,
+        has_model_stages_str = has_model_stages_str,
+        has_js_run_str = has_js_run_str,
         input_fields = input_fields,
         output_fields = output_fields,
     );
@@ -296,10 +329,11 @@ pub fn build_files(
 ) -> Result<Vec<GeneratedFile>, WebBackendError> {
     let workflow_json = emit_workflow_json(ir)?;
     let agent_ts = emit_agent_ts(ir)?;
-    let main_tsx = crate::emit::emit_main_tsx();
+    let has_js_run = has_js_run_stage(ir);
+    let main_tsx = crate::emit::emit_main_tsx(has_js_run);
     let app_css = crate::emit::emit_app_css();
 
-    let files = vec![
+    let mut files = vec![
         GeneratedFile {
             relative_path: PathBuf::from(format!("{package_dir}/package.json")),
             content: crate::emit::emit_package_json(package_dir, version, runtime_dep),
@@ -352,15 +386,27 @@ pub fn build_files(
             relative_path: PathBuf::from(format!("{package_dir}/src/webllm.worker.ts")),
             content: crate::emit::emit_webllm_worker(),
         },
-        GeneratedFile {
-            relative_path: PathBuf::from(format!("{package_dir}/.gitignore")),
-            content: crate::emit::emit_gitignore(),
-        },
-        GeneratedFile {
-            relative_path: PathBuf::from(format!("{package_dir}/README.md")),
-            content: crate::emit::emit_readme(&ir.workflow.id, package_dir, &ir.workflow.entry),
-        },
     ];
+
+    // Only emit (and import) the browser.js.run worker when the workflow
+    // actually uses `browser.js.run`. Otherwise the generated app would ship
+    // a worker asset that no code references (and a `new Worker(new URL(...))`
+    // expression that Vite statically analyzes would fail to resolve).
+    if has_js_run {
+        files.push(GeneratedFile {
+            relative_path: PathBuf::from(format!("{package_dir}/src/js.worker.ts")),
+            content: crate::emit::emit_js_run_worker(),
+        });
+    }
+
+    files.push(GeneratedFile {
+        relative_path: PathBuf::from(format!("{package_dir}/.gitignore")),
+        content: crate::emit::emit_gitignore(),
+    });
+    files.push(GeneratedFile {
+        relative_path: PathBuf::from(format!("{package_dir}/README.md")),
+        content: crate::emit::emit_readme(&ir.workflow.id, package_dir, &ir.workflow.entry),
+    });
 
     Ok(files)
 }
@@ -368,7 +414,6 @@ pub fn build_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nemoir_ir::*;
 
     fn judge_candidate_ir() -> WorkflowIr {
         let source = include_str!("../../nemoir-dsl-fe/tests/fixtures/judge_candidate-ir.yml");
