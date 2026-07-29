@@ -718,6 +718,129 @@ fn cli_compile_web_runtime_dependency_override() {
 }
 
 #[test]
+fn cli_compile_web_ui_dependency_override() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_uidep");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("--web-ui-dependency")
+        .arg("file:../../web/nemoir-ui")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web --web-ui-dependency");
+
+    assert!(output.status.success(), "compile should succeed");
+    let pkg = out_dir.join("judge-candidate").join("package.json");
+    let pkg_src = std::fs::read_to_string(&pkg).expect("should read package.json");
+    assert!(
+        pkg_src.contains(r#""@nemoir/web-ui": "file:../../web/nemoir-ui""#),
+        "package.json should carry the overridden ui dependency: {pkg_src}"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_ui_dependency_default() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_uidefault");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile --target web (default)");
+
+    assert!(output.status.success(), "compile should succeed");
+    let pkg = out_dir.join("judge-candidate").join("package.json");
+    let pkg_src = std::fs::read_to_string(&pkg).expect("should read package.json");
+    assert!(
+        pkg_src.contains(r#""@nemoir/web-ui": "^0.1.0""#),
+        "package.json should have default ui dependency ^0.1.0: {pkg_src}"
+    );
+
+    // main.tsx should import from @nemoir/web-ui
+    let main = out_dir.join("judge-candidate").join("src").join("main.tsx");
+    let main_src = std::fs::read_to_string(&main).expect("should read main.tsx");
+    assert!(
+        main_src.contains("@nemoir/web-ui"),
+        "main.tsx should import from @nemoir/web-ui: {main_src}"
+    );
+    assert!(
+        main_src.contains("useWebLlmSession"),
+        "main.tsx should use useWebLlmSession"
+    );
+    assert!(
+        main_src.contains("useWorkflowRun"),
+        "main.tsx should use useWorkflowRun"
+    );
+    assert!(
+        main_src.contains("WebUiHostProvider"),
+        "main.tsx should use WebUiHostProvider"
+    );
+    assert!(
+        main_src.contains("ModelLoader"),
+        "main.tsx should use ModelLoader"
+    );
+    assert!(
+        main_src.contains("WorkflowTraceDrawer"),
+        "main.tsx should use WorkflowTraceDrawer"
+    );
+    assert!(
+        main_src.contains("downloadJsonl"),
+        "main.tsx should use downloadJsonl"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn cli_compile_web_both_dependency_overrides() {
+    let out_dir = std::env::temp_dir().join("nemoir_web_bothdep");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("should create tempdir");
+
+    let output = nemoir_binary()
+        .arg("compile")
+        .arg(judge_candidate_path())
+        .arg("--target")
+        .arg("web")
+        .arg("--web-runtime-dependency")
+        .arg("file:../../web/nemoir-runtime")
+        .arg("--web-ui-dependency")
+        .arg("file:../../web/nemoir-ui")
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .expect("should run nemo compile with both overrides");
+
+    assert!(output.status.success(), "compile should succeed");
+    let pkg = out_dir.join("judge-candidate").join("package.json");
+    let pkg_src = std::fs::read_to_string(&pkg).expect("should read package.json");
+    assert!(
+        pkg_src.contains(r#""@nemoir/web-runtime": "file:../../web/nemoir-runtime""#),
+        "package.json should carry the overridden runtime dependency"
+    );
+    assert!(
+        pkg_src.contains(r#""@nemoir/web-ui": "file:../../web/nemoir-ui""#),
+        "package.json should carry the overridden ui dependency"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
 fn cli_compile_web_hint_tutor_positive() {
     // The Hints-in-Browser-inspired web demo workflow. It uses only
     // user.elicit and string/bool/string[] types, so it must succeed on the

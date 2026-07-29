@@ -33,6 +33,11 @@ enum Command {
         /// Use this to point at a local runtime checkout during development.
         #[arg(long)]
         web_runtime_dependency: Option<String>,
+        /// Override the `@nemoir/web-ui` dependency spec in the generated
+        /// `package.json` (web target only). Example: `file:../../web/nemoir-ui`.
+        /// Use this to point at a local web-ui checkout during development.
+        #[arg(long)]
+        web_ui_dependency: Option<String>,
     },
 }
 
@@ -55,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             dump_ir,
             web_runtime_dependency,
+            web_ui_dependency,
         } => {
             let (source, display_name) = read_input(&file)?;
 
@@ -202,6 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &ir,
                         &nemoir_backend_web::WebBackendOptions {
                             runtime_dependency: web_runtime_dependency.clone(),
+                            ui_dependency: web_ui_dependency.clone(),
                             ..Default::default()
                         },
                     )

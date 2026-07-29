@@ -338,6 +338,7 @@ pub fn build_files(
     package_dir: &str,
     version: &str,
     runtime_dep: &str,
+    ui_dep: &str,
 ) -> Result<Vec<GeneratedFile>, WebBackendError> {
     let workflow_json = emit_workflow_json(ir)?;
     let agent_ts = emit_agent_ts(ir)?;
@@ -349,7 +350,7 @@ pub fn build_files(
     let mut files = vec![
         GeneratedFile {
             relative_path: PathBuf::from(format!("{package_dir}/package.json")),
-            content: crate::emit::emit_package_json(package_dir, version, runtime_dep),
+            content: crate::emit::emit_package_json(package_dir, version, runtime_dep, ui_dep),
         },
         GeneratedFile {
             relative_path: PathBuf::from(format!("{package_dir}/tsconfig.json")),
@@ -463,7 +464,7 @@ mod tests {
     #[test]
     fn build_files_produces_expected_layout() {
         let ir = judge_candidate_ir();
-        let files = build_files(&ir, "judge-candidate", "0.1.0", "^0.1.0").unwrap();
+        let files = build_files(&ir, "judge-candidate", "0.1.0", "^0.1.0", "^0.1.0").unwrap();
         let paths: Vec<String> = files
             .iter()
             .map(|f| f.relative_path.to_string_lossy().into_owned())

@@ -12,8 +12,15 @@ use crate::escape::ts_template_body;
 /// - `package_dir`: kebab-case npm package name (e.g. `judge-candidate`).
 /// - `version`: package version string.
 /// - `runtime_dep`: dependency spec for `@nemoir/web-runtime`
-///   (e.g. `"^0.1.0"` or `"file:../../web/nemoir-runtime"`).
-pub fn emit_package_json(package_dir: &str, version: &str, runtime_dep: &str) -> String {
+///   (e.g. `"^0.3.1"` or `"file:../../web/nemoir-runtime"`).
+/// - `ui_dep`: dependency spec for `@nemoir/web-ui`
+///   (e.g. `"^0.1.0"` or `"file:../../web/nemoir-ui"`).
+pub fn emit_package_json(
+    package_dir: &str,
+    version: &str,
+    runtime_dep: &str,
+    ui_dep: &str,
+) -> String {
     format!(
         r#"{{
   "name": "{pkg}",
@@ -28,6 +35,7 @@ pub fn emit_package_json(package_dir: &str, version: &str, runtime_dep: &str) ->
   }},
   "dependencies": {{
     "@nemoir/web-runtime": "{runtime}",
+    "@nemoir/web-ui": "{ui_dep}",
     "@mlc-ai/web-llm": "^0.2.84",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -44,6 +52,7 @@ pub fn emit_package_json(package_dir: &str, version: &str, runtime_dep: &str) ->
         pkg = package_dir,
         ver = version,
         runtime = runtime_dep,
+        ui_dep = ui_dep,
     )
 }
 
@@ -240,14 +249,21 @@ The dev server serves cross-origin isolation headers (COOP/COEP).\n\n\
   a large model the runner UI checks available storage and warns if it looks\n\
   insufficient. Free browser storage or choose a smaller model. Cached models\n\
   never warn. For deterministic-only workflows this section does not apply.\n\n\
-## Building against a local runtime checkout\n\n\
-`@nemoir/web-runtime` is published to npm (>= 0.3.1), so `npm install` resolves it\n\
-directly. To build against an in-repo checkout during development, point the compile step at it:\n\n\
+## Building against local runtime / UI checkouts\n\n\
+`@nemoir/web-runtime` and `@nemoir/web-ui` are published to npm, so `npm install`\n\
+resolves them directly. To build against an in-repo checkout during development,\n\
+point the compile step at both packages:\n\n\
 ```bash\n\
 nemo compile <file>.nemo --target web \\
 \
-  --web-runtime-dependency file:../../web/nemoir-runtime -o out/\n\
+  --web-runtime-dependency file:../../web/nemoir-runtime \\
+\
+  --web-ui-dependency file:../../web/nemoir-ui \\
+\
+  -o out/\n\
 ```\n\n\
+Each override is independent — you can override only the runtime, only the UI,\n\
+or both.\n\n\
 ## Build\n\n\
 ```bash\n\
 npm run build\n\
@@ -280,39 +296,49 @@ fn html_escape(s: &str) -> String {
 
 /// Render the generic React runner UI (`src/main.tsx`).
 ///
-/// The full Phase-3 runner:
-/// - schema-derived input form (one control per IR input)
-/// - WebGPU + cross-origin-isolation detection
-/// - WebLLM model selector (prebuilt list, sorted by VRAM, load progress)
-/// - run/cancel via AbortController
-/// - React-based WebUiHost (elicit/confirm modals)
-/// - streamed event timeline; reasoning channel opt-in
-/// - typed result panel; user-initiated JSONL trace export
-/// - local-only data disclosure indicator
+/// Generated app uses shared primitives from `@nemoir/web-ui` for:
+/// - `useWebLlmSession` — WebLLM lifecycle/model UI (disabled entirely for
+///   deterministic-only workflows via `enabled: HAS_MODEL_STAGES`)
+/// - `useWorkflowRun` — generic async stream runner, cancellation,
+///   coalesced timeline derivation, result/error capture
+/// - `WebUiHostProvider`/`useWebUiHost` — elicit/confirm dialog host
+/// - `ModelLoader` — model selection/loading UI
+/// - `WorkflowTraceDrawer` — scrollable event timeline display
+/// - `downloadJsonl` — JSONL trace export
 ///
-/// The UI reads `workflow.json` at runtime, so it remains generic across
-/// workflows. The runtime package stays framework-neutral; this file is the
-/// only React consumer in the generated app. WebLLM is lazy-imported by the
-/// runtime so it is code-split into a separate chunk (not on the first-paint
-/// critical path).
+/// Schema-driven input form, generated Agent construction, worker/sandbox
+/// wiring, disclosure, and styling remain app-specific.
+///
+/// The emitted app avoids model session creation for deterministic-only
+/// workflows by passing `enabled: HAS_MODEL_STAGES` to `useWebLlmSession`.
+/// Model-storage safety: ordinary Load assesses storage before starting an
+/// insufficient download; the explicit Load anyway path bypasses the warning.
 pub fn emit_main_tsx(has_js_run: bool, has_js_sandbox: bool) -> String {
-    let src = r##"import { useEffect, useMemo, useRef, useState } from "react";
+    let src = r##"import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Agent, HAS_JS_SANDBOX, HAS_MODEL_STAGES, WORKFLOW_ID, type AgentInput } from "./agent";
+import {
+  Agent,
+  HAS_JS_SANDBOX,
+  HAS_MODEL_STAGES,
+  WORKFLOW_ID,
+  type AgentInput,
+} from "./agent";
 import workflowManifest from "./workflow.json";
 import {
-  createWebllmSession,
   __NEMOIR_SANDBOX_IMPORT__
-  isCrossOriginIsolated,
-  isWebGPUAvailable,
   type ModelAdapter,
-  type StorageCapacityAssessment,
-  type WebLlmModelInfo,
-  type WebLlmProgressReport,
-  type WebLlmSession,
   type WebUiHost,
-  type WorkflowEvent,
 } from "@nemoir/web-runtime";
+import {
+  useWebLlmSession,
+  useWorkflowRun,
+  useWebUiHost,
+  WebUiHostProvider,
+  ModelLoader,
+  WorkflowTraceDrawer,
+  downloadJsonl,
+  type WorkflowRunner,
+} from "@nemoir/web-ui";
 
 // Build the browser.js.run worker factory from the emitted static worker.
 const jsWorkerFactory = () =>
@@ -321,18 +347,6 @@ __NEMOIR_SANDBOX_FACTORY__
 import "./app.css";
 
 type InputSpec = { id: string; type: string };
-
-interface PendingElicit {
-  question: string;
-  options?: string[];
-  resolve: (v: string) => void;
-  reject: (e: unknown) => void;
-}
-interface PendingConfirm {
-  message: string;
-  resolve: (v: boolean) => void;
-  reject: (e: unknown) => void;
-}
 
 function defaultFor(type: string): unknown {
   switch (type) {
@@ -345,7 +359,6 @@ function defaultFor(type: string): unknown {
     case "string[]":
       return "";
     case "json":
-      // Default to valid empty-object JSON text so the textarea starts valid.
       return "{}";
     default:
       return "";
@@ -368,16 +381,12 @@ function parseInputValue(type: string, raw: unknown): unknown {
             .filter((s) => s.length > 0)
         : [];
     case "json": {
-      // The form holds raw text; parse to a structured value so model stages
-      // and exec args receive an object/array, not an ad-hoc string.
       const text = typeof raw === "string" ? raw : "";
       const trimmed = text.trim();
       if (trimmed.length === 0) return null;
       try {
         return JSON.parse(trimmed);
       } catch {
-        // Invalid JSON — the run button stays disabled via the json-validity
-        // check; return null so a forced run fails fast at the tool boundary.
         return null;
       }
     }
@@ -387,6 +396,14 @@ function parseInputValue(type: string, raw: unknown): unknown {
 }
 
 function App() {
+  return (
+    <WebUiHostProvider>
+      <AppInner />
+    </WebUiHostProvider>
+  );
+}
+
+function AppInner() {
   const inputs = workflowManifest.inputs as InputSpec[];
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const init: Record<string, unknown> = {};
@@ -394,256 +411,112 @@ function App() {
     return init;
   });
 
-  // Compute which `json` inputs currently hold invalid JSON text, so the Run
-  // button can be disabled and the offending field can be flagged. Computed
-  // from `values` each render (no separate state to keep in sync).
+  // Compute which `json` inputs currently hold invalid JSON text.
   const invalidJsonInputs = useMemo(() => {
     const bad = new Set<string>();
     for (const inp of inputs) {
       if (inp.type !== "json") continue;
       const text = String(values[inp.id] ?? "").trim();
-      if (text.length === 0) continue; // empty == null, valid
+      if (text.length === 0) continue;
       try { JSON.parse(text); } catch { bad.add(inp.id); }
     }
     return bad;
   }, [inputs, values]);
   const hasInvalidJson = invalidJsonInputs.size > 0;
 
-  const webgpu = useMemo(() => isWebGPUAvailable(), []);
-  const coi = useMemo(() => isCrossOriginIsolated(), []);
+  // ---- WebLLM lifecycle via shared hook (disabled for deterministic-only)
+  const {
+    webgpuAvailable: webgpu,
+    crossOriginIsolated: coi,
+    session,
+    models,
+    selectedModel,
+    setSelectedModel,
+    loading,
+    progress,
+    error: sessionError,
+    cachedIds,
+    storageAssessment,
+    isModelLoaded: modelLoaded,
+    loadModel,
+    assessStorageForSelected,
+  } = useWebLlmSession({
+    enabled: HAS_MODEL_STAGES,
+    workerFactory: () =>
+      new Worker(new URL("./webllm.worker.ts", import.meta.url), { type: "module" }),
+  });
 
-  const [session, setSession] = useState<WebLlmSession | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<WebLlmProgressReport | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  const [cachedIds, setCachedIds] = useState<readonly string[] | null>(null);
-  const [storageAssessment, setStorageAssessment] = useState<StorageCapacityAssessment | null>(null);
+  // Storage-warning dismissal tracks per-model and resets on selection.
   const [dismissedStorageWarning, setDismissedStorageWarning] = useState(false);
-
-  const refreshCached = (s: WebLlmSession | null) => {
-    if (!s) return;
-    s.cachedModelIds().then(setCachedIds).catch(() => {});
-  };
-
-  // Re-assess storage when the selected model or cache state changes.
-  useEffect(() => {
-    if (!session || !selectedModel) {
-      setStorageAssessment(null);
-      return;
-    }
-    let cancelled = false;
-    session.assessStorage(selectedModel).then((a) => {
-      if (!cancelled) setStorageAssessment(a);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [session, selectedModel, cachedIds]);
-
-  // Reset the storage-warning dismissal when the model changes.
   useEffect(() => { setDismissedStorageWarning(false); }, [selectedModel]);
 
-  const [running, setRunning] = useState(false);
-  const [events, setEvents] = useState<WorkflowEvent[]>([]);
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  // ---- Run lifecycle via shared hook
+  const uiHost = useWebUiHost();
 
-  const [pendingElicit, setPendingElicit] = useState<PendingElicit | null>(null);
-  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
-
-  useEffect(() => {
-    if (!HAS_MODEL_STAGES || !webgpu) return;
-    let cancelled = false;
-    createWebllmSession({
-      workerFactory: () =>
-        new Worker(new URL("./webllm.worker.ts", import.meta.url), { type: "module" }),
-      onProgress: (r) => !cancelled && setProgress(r),
-    })
-      .then((s) => {
-        if (cancelled) {
-          void s.dispose();
-          return;
-        }
-        setSession(s);
-        refreshCached(s);
-        const smallest = [...s.models].sort(
-          (a, b) => (a.vramRequiredMb ?? 0) - (b.vramRequiredMb ?? 0),
-        )[0];
-        if (smallest) setSelectedModel(smallest.modelId);
-      })
-      .catch((e) => !cancelled && setSessionError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [webgpu]);
-
-  const uiHost: WebUiHost = useMemo(
-    () => ({
-      elicit(question, options, signal) {
-        return new Promise<string>((resolve, reject) => {
-          setPendingElicit({ question, options, resolve, reject });
-          signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        });
-      },
-      confirm(message, signal) {
-        return new Promise<boolean>((resolve, reject) => {
-          setPendingConfirm({ message, resolve, reject });
-          signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        });
-      },
-    }),
-    [],
-  );
-
-  // Separate load path so "Load anyway" can bypass storage assessment.
-  const performLoad = async () => {
-    if (!session || !selectedModel) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await session.ensureLoaded(selectedModel);
-      setProgress(null);
-      refreshCached(session);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLoadModel = async () => {
-    if (!session || !selectedModel) return;
-    setLoading(true);
-    setError(null);
-    // Re-assess storage immediately before download (quota may have changed).
-    try {
-      const a = await session.assessStorage(selectedModel);
-      setStorageAssessment(a);
-      if (!a.likelySufficient) {
-        setDismissedStorageWarning(false);
-        setLoading(false);
-        return; // wait for explicit "Load anyway"
-      }
-    } catch { /* ignore assessment failures; proceed with load */ }
-    await performLoad();
-  };
-
-  const handleRun = async () => {
-    setError(null);
-    setEvents([]);
-    setResult(null);
-    setRunning(true);
-    const ac = new AbortController();
-    abortRef.current = ac;
-    try {
+  const runner: WorkflowRunner = useCallback(
+    async function* (input: Record<string, unknown>, signal: AbortSignal) {
       let modelAdapter: ModelAdapter | undefined;
       if (HAS_MODEL_STAGES) {
         if (!session) throw new Error("WebLLM session is not ready.");
-        await session.ensureLoaded(selectedModel, ac.signal);
+        await session.ensureLoaded(selectedModel, signal);
         modelAdapter = session.adapter;
       }
       const agent = new Agent({
         modelAdapter,
-        uiHost,
+        uiHost: uiHost as WebUiHost,
         browserTools: __NEMOIR_BROWSER_TOOLS__,
       });
-      const parsed: Record<string, unknown> = {};
-      for (const inp of inputs) {
-        parsed[inp.id] = parseInputValue(inp.type, values[inp.id]);
-      }
-      for await (const event of agent.stream(parsed as unknown as AgentInput, { signal: ac.signal })) {
-        setEvents((prev) => [...prev, event]);
-        if (event.kind === "run_completed") {
-          setResult((event.result as { output?: Record<string, unknown> })?.output ?? null);
-        }
-        if (event.kind === "run_failed") {
-          setError(event.error ?? "run failed");
-        }
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // AbortError from cancellation is expected; don't show as an error.
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
-        setError(msg);
-      }
-    } finally {
-      setRunning(false);
-      abortRef.current = null;
+      yield* agent.stream(input as unknown as AgentInput, { signal });
+    },
+    [session, selectedModel, uiHost],
+  );
+
+  const {
+    running,
+    events,
+    timeline,
+    result,
+    error,
+    start: startRun,
+    cancel,
+  } = useWorkflowRun(runner);
+
+  // ---- Load handler with storage assessment guard
+  const handleLoadModel = useCallback(async () => {
+    if (!selectedModel) return;
+    // Re-assess storage immediately before download (quota may have changed).
+    // The shared hook also publishes this fresh result to ModelLoader.
+    const assessment = await assessStorageForSelected();
+    if (assessment && !assessment.likelySufficient) {
+      setDismissedStorageWarning(false);
+      return; // wait for explicit "Load anyway"
     }
-  };
+    await loadModel();
+  }, [selectedModel, assessStorageForSelected, loadModel]);
 
-  const handleCancel = () => {
-    abortRef.current?.abort();
-  };
+  // "Load anyway" bypasses storage assessment.
+  const handleLoadAnyway = useCallback(async () => {
+    setDismissedStorageWarning(true);
+    await loadModel();
+  }, [loadModel]);
 
-  const exportTrace = () => {
-    const jsonl = events.map((e) => JSON.stringify(e)).join("\n");
-    const blob = new Blob([jsonl], { type: "application/x-ndjson" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${WORKFLOW_ID}-trace.jsonl`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const modelLoaded = session?.isModelLoaded(selectedModel) ?? false;
-
-  // Coalesce consecutive model_delta events (same stage + channel) into a
-  // single readable message block, instead of one timeline row per token.
-  // Non-delta events stay as individual rows.
-  const timeline = useMemo(() => {
-    type DeltaRun = {
-      kind: "delta_run";
-      firstSeq: number;
-      lastSeq: number;
-      stageId?: string;
-      channel?: string | null;
-      text: string;
-    };
-    type Item = DeltaRun | { kind: "event"; seq: number; event: WorkflowEvent };
-    const items: Item[] = [];
-    let run: DeltaRun | null = null;
-    const flush = () => {
-      if (run) {
-        items.push(run);
-        run = null;
-      }
-    };
-    for (const e of events) {
-      if (e.kind === "model_delta") {
-        const ch = e.channel ?? null;
-        if (
-          run &&
-          run.stageId === e.stageId &&
-          ((run.channel ?? null) === ch)
-        ) {
-          run.text += e.text ?? "";
-          run.lastSeq = e.sequence;
-        } else {
-          flush();
-          run = {
-            kind: "delta_run",
-            firstSeq: e.sequence,
-            lastSeq: e.sequence,
-            stageId: e.stageId,
-            channel: ch,
-            text: e.text ?? "",
-          };
-        }
-      } else {
-        flush();
-        items.push({ kind: "event", seq: e.sequence, event: e });
-      }
+  // ---- Run handler
+  const handleRun = useCallback(() => {
+    if (running) return;
+    const parsed: Record<string, unknown> = {};
+    for (const inp of inputs) {
+      parsed[inp.id] = parseInputValue(inp.type, values[inp.id]);
     }
-    flush();
-    return items;
+    startRun(parsed);
+  }, [running, inputs, values, startRun]);
+
+  // ---- JSONL export
+  const handleExportTrace = useCallback(() => {
+    if (events.length === 0) return;
+    downloadJsonl(events, `${WORKFLOW_ID}-trace.jsonl`);
   }, [events]);
 
+  // ---- Render
   return (
     <div className="app">
       <header className="app-header">
@@ -660,8 +533,6 @@ function App() {
       </section>
 
       {HAS_JS_SANDBOX && (() => {
-        // Derive each sandbox stage's declared write names from the compiled
-        // IR so the required return envelope is visible where code is authored.
         const sandboxStages = (workflowManifest.nodes ?? [])
           .filter((n: any) => n.execution?.kind === "tool" && n.execution?.capability === "browser.js.sandbox")
           .map((n: any) => ({ id: n.id as string, writes: (n.writes ?? []).map((w: any) => w.name as string) }));
@@ -697,66 +568,20 @@ function App() {
           {!session && webgpu && <p className="muted">Loading model catalog…</p>}
           {session && (
             <>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={running || loading}
-              >
-                {(() => {
-                  const cached = new Set(cachedIds ?? []);
-                  const byVram = [...session.models].sort(
-                    (a, b) => (a.vramRequiredMb ?? 0) - (b.vramRequiredMb ?? 0),
-                  );
-                  const cachedModels = byVram.filter((m) => cached.has(m.modelId));
-                  const availableModels = byVram.filter((m) => !cached.has(m.modelId));
-                  const opt = (m: WebLlmModelInfo) => (
-                    <option key={m.modelId} value={m.modelId}>
-                      {m.label} (~{Math.round((m.vramRequiredMb ?? 0) / 1024)} GB)
-                    </option>
-                  );
-                  return (
-                    <>
-                      {cachedModels.length > 0 && (
-                        <optgroup label="Cached models">
-                          {cachedModels.map(opt)}
-                        </optgroup>
-                      )}
-                      {/* Only show this group if there are uncached models (or
-                          if cache state isn't resolved yet, render everything under
-                          it so the list isn't empty on first paint). */}
-                      {(availableModels.length > 0 || cachedIds === null) && (
-                        <optgroup label={cachedIds === null ? "Available models" : "Available models (need download)"}>
-                          {(cachedIds === null ? byVram : availableModels).map(opt)}
-                        </optgroup>
-                      )}
-                    </>
-                  );
-                })()}
-              </select>{" "}
-              {storageAssessment && !storageAssessment.likelySufficient && !dismissedStorageWarning && (
-                <div className="card warn" style={{ marginTop: "0.75rem" }}>
-                  <strong>⚠ Storage may be insufficient.</strong>{" "}
-                  {storageAssessment.message}{" "}
-                  <button
-                    onClick={() => { setDismissedStorageWarning(true); performLoad(); }}
-                    style={{ marginLeft: "0.5rem" }}
-                  >
-                    Load anyway
-                  </button>
-                </div>
-              )}
-              <button
-                onClick={handleLoadModel}
-                disabled={modelLoaded || loading || running || !selectedModel}
-              >
-                {modelLoaded ? "Loaded" : loading ? "Loading…" : "Load model"}
-              </button>
-              {progress && (
-                <div className="progress">
-                  <div className="bar" style={{ width: `${Math.round(progress.progress * 100)}%` }} />
-                  <span>{progress.text}</span>
-                </div>
-              )}
+              <ModelLoader
+                models={models}
+                cachedIds={cachedIds}
+                selectedModel={selectedModel}
+                onSelectModel={setSelectedModel}
+                loading={loading}
+                isLoaded={modelLoaded}
+                progress={progress}
+                storageAssessment={storageAssessment}
+                storageWarningDismissed={dismissedStorageWarning}
+                onDismissStorageWarning={handleLoadAnyway}
+                onLoad={handleLoadModel}
+                disabled={running}
+              />
             </>
           )}
         </section>
@@ -819,136 +644,23 @@ function App() {
         <button className="primary" onClick={handleRun} disabled={running || (HAS_MODEL_STAGES ? !modelLoaded : false) || hasInvalidJson}>
           {running ? "Running…" : "Run"}
         </button>
-        <button onClick={handleCancel} disabled={!running}>
+        <button onClick={cancel} disabled={!running}>
           Cancel
         </button>
-        <button onClick={exportTrace} disabled={events.length === 0}>
+        <button onClick={handleExportTrace} disabled={events.length === 0}>
           Export trace (JSONL)
         </button>
       </section>
 
       {error && <section className="card error">❌ {error}</section>}
 
-      {events.length > 0 && (
-        <section className="card">
-          <h2>Events</h2>
-          <ol className="timeline">
-            {timeline.map((item) =>
-              item.kind === "delta_run" ? (
-                <li key={`r${item.firstSeq}`} className="event delta-run">
-                  <span className="seq">{item.firstSeq}{item.lastSeq !== item.firstSeq ? `–${item.lastSeq}` : ""}</span>{" "}
-                  <span className="kind">{item.channel === "reasoning" ? "reasoning" : "assistant"}</span>
-                  {item.stageId && <span className="stage">{item.stageId}</span>}
-                  <span className={`delta ${item.channel === "reasoning" ? "reasoning" : ""}`}>{item.text}</span>
-                </li>
-              ) : (
-                <li key={`e${item.seq}`} className={`event ${item.event.kind}`}>
-                  <span className="seq">{item.seq}</span>{" "}
-                  <span className="kind">{item.event.kind}</span>
-                  {item.event.stageId && <span className="stage">{item.event.stageId}</span>}
-                  {item.event.kind === "transition_selected" && item.event.transitionTo && (
-                    <span className="arrow">→ {item.event.transitionTo}</span>
-                  )}
-                  {item.event.error && <span className="err-text">{item.event.error}</span>}
-                </li>
-              ),
-            )}
-          </ol>
-        </section>
-      )}
+      <WorkflowTraceDrawer items={timeline} />
 
       {result && (
         <section className="card">
           <h2>Result</h2>
           <pre>{JSON.stringify(result, null, 2)}</pre>
         </section>
-      )}
-
-      {pendingElicit && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <p>{pendingElicit.question}</p>
-            {pendingElicit.options && pendingElicit.options.length > 0 ? (
-              <div className="modal-actions">
-                {pendingElicit.options.map((opt) => (
-                  <button
-                    key={opt}
-                    onClick={() => {
-                      pendingElicit.resolve(opt);
-                      setPendingElicit(null);
-                    }}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  id="elicit-input"
-                  autoFocus
-                  placeholder="Type your answer…"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      pendingElicit.resolve(
-                        (document.getElementById("elicit-input") as HTMLInputElement)?.value ?? "",
-                      );
-                      setPendingElicit(null);
-                    }
-                  }}
-                />
-                <div className="modal-actions">
-                  <button
-                    className="primary"
-                    onClick={() => {
-                      pendingElicit.resolve(
-                        (document.getElementById("elicit-input") as HTMLInputElement)?.value ?? "",
-                      );
-                      setPendingElicit(null);
-                    }}
-                  >
-                    Submit
-                  </button>
-                  <button
-                    onClick={() => {
-                      pendingElicit.reject(new DOMException("Cancelled by user", "AbortError"));
-                      setPendingElicit(null);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {pendingConfirm && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <p>{pendingConfirm.message}</p>
-            <div className="modal-actions">
-              <button
-                onClick={() => {
-                  pendingConfirm.resolve(true);
-                  setPendingConfirm(null);
-                }}
-              >
-                Yes
-              </button>
-              <button
-                onClick={() => {
-                  pendingConfirm.resolve(false);
-                  setPendingConfirm(null);
-                }}
-              >
-                No
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -1037,7 +749,7 @@ button {
   cursor: pointer; font: inherit;
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary, button.nemoir-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .progress { margin-top: 0.5rem; position: relative; height: 1.4rem; background: #eee; border-radius: 6px; overflow: hidden; }
 .progress .bar { position: absolute; inset: 0; background: var(--accent); opacity: 0.35; transition: width 0.2s; }
 .progress span { position: relative; padding: 0.2rem 0.5rem; font-size: 0.8rem; display: block; }
@@ -1052,11 +764,11 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .timeline .arrow { color: var(--accent); margin-left: 0.4rem; }
 .timeline .err-text { color: #dc2626; margin-left: 0.4rem; }
 pre { background: #f4f4f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
-.modal { background: var(--card); padding: 1.25rem; border-radius: 10px; min-width: 320px; }
-.modal p { margin: 0 0 0.75rem; white-space: pre-wrap; max-height: 50vh; overflow: auto; }
-.modal input { width: 100%; padding: 0.4rem; border: 1px solid var(--border); border-radius: 6px; }
-.modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.75rem; }
+.modal-backdrop, .nemoir-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal, .nemoir-modal { background: var(--card); padding: 1.25rem; border-radius: 10px; min-width: 320px; }
+.modal p, .nemoir-modal p { margin: 0 0 0.75rem; white-space: pre-wrap; max-height: 50vh; overflow: auto; }
+.modal input, .nemoir-modal input { width: 100%; padding: 0.4rem; border: 1px solid var(--border); border-radius: 6px; }
+.modal-actions, .nemoir-modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.75rem; }
 "##.to_string()
 }
 
@@ -1109,9 +821,10 @@ mod tests {
 
     #[test]
     fn package_json_contains_runtime_dep() {
-        let s = emit_package_json("judge-candidate", "0.1.0", "^0.1.0");
+        let s = emit_package_json("judge-candidate", "0.1.0", "^0.1.0", "^0.1.0");
         assert!(s.contains(r#""name": "judge-candidate""#));
         assert!(s.contains(r#""@nemoir/web-runtime": "^0.1.0""#));
+        assert!(s.contains(r#""@nemoir/web-ui": "^0.1.0""#));
         assert!(s.contains(r#""@mlc-ai/web-llm": "^0.2.84""#));
         assert!(s.contains(r#""react": "^19.0.0""#));
         assert!(s.contains(r#""version": "0.1.0""#));
@@ -1119,8 +832,20 @@ mod tests {
 
     #[test]
     fn package_json_supports_file_dep() {
-        let s = emit_package_json("foo", "1.2.3", "file:../../web/nemoir-runtime");
+        let s = emit_package_json(
+            "foo",
+            "1.2.3",
+            "file:../../web/nemoir-runtime",
+            "file:../../web/nemoir-ui",
+        );
         assert!(s.contains(r#""@nemoir/web-runtime": "file:../../web/nemoir-runtime""#));
+        assert!(s.contains(r#""@nemoir/web-ui": "file:../../web/nemoir-ui""#));
+    }
+
+    #[test]
+    fn package_json_contains_ui_dep_default() {
+        let s = emit_package_json("test-app", "0.1.0", "^0.3.1", "^0.1.0");
+        assert!(s.contains(r#""@nemoir/web-ui": "^0.1.0""#));
     }
 
     #[test]
@@ -1161,17 +886,21 @@ mod tests {
         let s = emit_main_tsx(true, false);
         assert!(s.contains("from \"./agent\""));
         assert!(s.contains("import workflowManifest from \"./workflow.json\""));
-        assert!(s.contains("createWebllmSession"));
-        assert!(s.contains("WebLLM"));
+        assert!(s.contains("@nemoir/web-ui"));
+        assert!(s.contains("@nemoir/web-runtime"));
         assert!(s.contains("./app.css"));
-        // Coalescing of consecutive model_delta chunks into one readable block.
-        assert!(s.contains("delta_run"));
-        assert!(s.contains("model_delta"));
-        // Phase-5 storage-assessment UI.
-        assert!(s.contains("StorageCapacityAssessment"));
+        // Shared primitives imported from @nemoir/web-ui.
+        assert!(s.contains("useWebLlmSession"));
+        assert!(s.contains("useWorkflowRun"));
+        assert!(s.contains("WebUiHostProvider"));
+        assert!(s.contains("ModelLoader"));
+        assert!(s.contains("WorkflowTraceDrawer"));
+        assert!(s.contains("downloadJsonl"));
+        // Model session disabled for deterministic-only via enabled flag.
+        assert!(s.contains("enabled: HAS_MODEL_STAGES"));
+        // Storage assessment guard + Load anyway bypass.
         assert!(s.contains("assessStorage"));
-        assert!(s.contains("Storage may be insufficient"));
-        assert!(s.contains("Load anyway"));
+        assert!(s.contains("dismissedStorageWarning"));
         // Phase-6: js-worker wiring is present when has_js_run=true.
         assert!(s.contains("jsWorkerFactory"));
         assert!(s.contains("./js.worker.ts"));
@@ -1182,13 +911,17 @@ mod tests {
     fn main_tsx_omits_js_worker_when_unused() {
         let s = emit_main_tsx(false, false);
         // No js.run stage → no jsWorkerFactory definition, no js.worker.ts import,
-        // and an empty browserTools object (http.fetch + storage only).
+        // and an empty browserTools object.
         assert!(!s.contains("jsWorkerFactory"));
         assert!(!s.contains("./js.worker.ts"));
         assert!(s.contains("browserTools: {}"));
         // The json form control is always present (harmless when no json inputs).
         assert!(s.contains(r###"case "json":"###));
         assert!(s.contains("invalidJsonInputs"));
+        // Shared UI primitives still imported.
+        assert!(s.contains("@nemoir/web-ui"));
+        assert!(s.contains("useWebLlmSession"));
+        assert!(s.contains("useWorkflowRun"));
     }
 
     #[test]
@@ -1199,6 +932,9 @@ mod tests {
         assert!(s.contains("browserTools: { jsSandboxRunner }"));
         assert!(!s.contains("jsWorkerFactory"));
         assert!(!s.contains("./js.worker.ts"));
+        // Shared UI primitives still imported.
+        assert!(s.contains("@nemoir/web-ui"));
+        assert!(s.contains("ModelLoader"));
     }
 
     #[test]
@@ -1215,11 +951,31 @@ mod tests {
     }
 
     #[test]
+    fn main_tsx_web_ui_host_provider_wraps_app() {
+        let s = emit_main_tsx(false, false);
+        assert!(s.contains("WebUiHostProvider"));
+        assert!(s.contains("<AppInner"));
+        assert!(s.contains("useWebUiHost"));
+    }
+
+    #[test]
+    fn main_tsx_uses_workflow_run_hook() {
+        let s = emit_main_tsx(false, false);
+        assert!(s.contains("useWorkflowRun"));
+        assert!(s.contains("WorkflowRunner"));
+        assert!(s.contains("WorkflowTraceDrawer"));
+        assert!(s.contains("downloadJsonl"));
+    }
+
+    #[test]
     fn app_css_has_styles() {
         let s = emit_app_css();
         assert!(s.contains("--accent"));
         assert!(s.contains(".timeline"));
         assert!(s.contains(".modal"));
+        assert!(s.contains(".nemoir-modal-backdrop"));
+        assert!(s.contains(".nemoir-modal-actions"));
+        assert!(s.contains("button.nemoir-primary"));
         assert!(s.contains(".delta-run"));
         assert!(s.contains(".reasoning"));
     }
@@ -1238,5 +994,8 @@ mod tests {
         assert!(s.contains("npm run dev"));
         assert!(s.contains("src/workflow.json"));
         assert!(s.contains("GitHub Pages"));
+        assert!(s.contains("--web-runtime-dependency"));
+        assert!(s.contains("--web-ui-dependency"));
+        assert!(s.contains("Each override is independent"));
     }
 }
