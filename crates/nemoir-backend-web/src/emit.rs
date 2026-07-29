@@ -12,9 +12,9 @@ use crate::escape::ts_template_body;
 /// - `package_dir`: kebab-case npm package name (e.g. `judge-candidate`).
 /// - `version`: package version string.
 /// - `runtime_dep`: dependency spec for `@nemoir/web-runtime`
-///   (e.g. `"^0.3.1"` or `"file:../../web/nemoir-runtime"`).
+///   (e.g. `"^0.4.0"` or `"file:../../web/nemoir-runtime"`).
 /// - `ui_dep`: dependency spec for `@nemoir/web-ui`
-///   (e.g. `"^0.1.0"` or `"file:../../web/nemoir-ui"`).
+///   (e.g. `"^0.2.0"` or `"file:../../web/nemoir-ui"`).
 pub fn emit_package_json(
     package_dir: &str,
     version: &str,
@@ -844,8 +844,8 @@ mod tests {
 
     #[test]
     fn package_json_contains_ui_dep_default() {
-        let s = emit_package_json("test-app", "0.1.0", "^0.3.1", "^0.1.0");
-        assert!(s.contains(r#""@nemoir/web-ui": "^0.1.0""#));
+        let s = emit_package_json("test-app", "0.1.0", "^0.4.0", "^0.2.0");
+        assert!(s.contains(r#""@nemoir/web-ui": "^0.2.0""#));
     }
 
     #[test]

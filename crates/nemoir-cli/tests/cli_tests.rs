@@ -766,8 +766,8 @@ fn cli_compile_web_ui_dependency_default() {
     let pkg = out_dir.join("judge-candidate").join("package.json");
     let pkg_src = std::fs::read_to_string(&pkg).expect("should read package.json");
     assert!(
-        pkg_src.contains(r#""@nemoir/web-ui": "^0.1.0""#),
-        "package.json should have default ui dependency ^0.1.0: {pkg_src}"
+        pkg_src.contains(r#""@nemoir/web-ui": "^0.2.0""#),
+        "package.json should have default ui dependency ^0.2.0: {pkg_src}"
     );
 
     // main.tsx should import from @nemoir/web-ui
