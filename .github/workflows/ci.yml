@@ -17,6 +17,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check local Markdown links
+        run: python3 scripts/check_markdown_links.py README.md docs examples
+
       - name: Install pinned Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

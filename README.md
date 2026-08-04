@@ -9,6 +9,8 @@ can be inspected and lowered to multiple runtime targets.
 > may evolve; it is not presented as a production agent platform or a security
 > guarantee.
 
+For user-facing compiler documentation, start with [docs/README.md](docs/README.md).
+
 ```text
 .nemo workflow → DSL frontend → Agent Workflow IR → validation → backends
                                                              ├─ HTML visualizer
