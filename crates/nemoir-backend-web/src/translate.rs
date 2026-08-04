@@ -90,9 +90,7 @@ fn collect_exit_fields(
 /// - single-exit required: `T`
 /// - single-exit optional: `T | null`
 fn ts_output_field_type(ts_type: &str, optional: bool, multi_exit: bool) -> String {
-    if multi_exit {
-        format!("{ts_type} | null")
-    } else if optional {
+    if multi_exit || optional {
         format!("{ts_type} | null")
     } else {
         ts_type.to_string()

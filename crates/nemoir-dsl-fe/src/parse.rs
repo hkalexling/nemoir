@@ -80,7 +80,7 @@ pub fn parse_source(source: &str, filename: &str) -> Result<WorkflowAst, Diagnos
                 }
                 pest::error::ErrorVariant::CustomError { message } => message,
             };
-            let label_msg = format!("{} {}", "here", &msg);
+            let label_msg = format!("here {msg}");
             return Err(Diagnostic::ParseError(ParseError {
                 message: format!("parse error: {}", msg),
                 filename: filename.to_string(),

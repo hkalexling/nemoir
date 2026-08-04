@@ -1,0 +1,64 @@
+name: Compiler CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Format, lint, test, and validate examples
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+          override: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Validate public examples
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo run --quiet --package nemoir-cli -- check examples/hello-workflow/hello.nemo
+          cargo run --quiet --package nemoir-cli -- check examples/policy-gated-edit/policy-gated-edit.nemo
+          cargo run --quiet --package nemoir-cli -- check examples/web-hint-tutor/hint-tutor.nemo
+
+          output_dir="$(mktemp -d)"
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/hello-workflow/hello.nemo \
+            --target visualizer \
+            --output "$output_dir/hello-workflow.html"
+          test -s "$output_dir/hello-workflow.html"
+
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/policy-gated-edit/policy-gated-edit.nemo \
+            --target python \
+            --output "$output_dir/python"
+          test -f "$output_dir/python/pyproject.toml"
+          test -f "$output_dir/python/policy_gated_edit/_agent.py"
+
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/web-hint-tutor/hint-tutor.nemo \
+            --target web \
+            --output "$output_dir/web"
+          test -f "$output_dir/web/hint-tutor/package.json"
+          test -f "$output_dir/web/hint-tutor/src/workflow.json"
