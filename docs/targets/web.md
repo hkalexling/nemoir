@@ -2,6 +2,11 @@
 
 The web target compiles a validated workflow into a static Vite/TypeScript browser application that runs on the public [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) package repository and the generated React runner from [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui).
 
+This generated application is distinct from the browser-hosted NemoIR authoring
+editor. That editor invokes this backend through the WASM compiler and offers a
+source ZIP; this guide remains authoritative for generated web-app output and
+compatibility. See [Browser compiler](../browser-compiler.md).
+
 See also: [DSL and IR](../dsl-and-ir.md), [Safety and limitations](../safety-and-limitations.md), and [Compatibility](../compatibility.md).
 
 ## Compile

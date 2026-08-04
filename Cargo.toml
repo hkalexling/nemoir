@@ -7,6 +7,7 @@ members = [
     "crates/nemoir-backend-visualizer",
     "crates/nemoir-backend-python",
     "crates/nemoir-backend-web",
+    "crates/nemoir-wasm",
 ]
 
 [workspace.package]

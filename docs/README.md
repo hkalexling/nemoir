@@ -1,6 +1,6 @@
 # NemoIR compiler docs
 
-These docs cover the public compiler surface in this workspace: building or installing `nemo`, writing `.nemo` workflows, running `nemo check` and `nemo compile`, and understanding current backend compatibility.
+These docs cover the public compiler surface in this workspace: building or installing `nemo`, writing `.nemo` workflows, running `nemo check` and `nemo compile`, using the browser compiler, and understanding current backend compatibility.
 
 NemoIR is a research compiler for structured agent workflows. This documentation describes the current compiler behavior in the public `compiler/` workspace. It does not present NemoIR as a production product or a security guarantee.
 
@@ -12,6 +12,8 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 - [DSL and IR reference](dsl-and-ir.md)
 - [Python target guide](targets/python.md)
 - [Web target guide](targets/web.md)
+- [Browser compiler](browser-compiler.md)
+- [WASM compiler package](wasm-package.md)
 - [Safety and limitations](safety-and-limitations.md)
 - [Compatibility](compatibility.md)
 - [Troubleshooting](troubleshooting.md)

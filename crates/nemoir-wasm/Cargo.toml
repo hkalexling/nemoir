@@ -1,0 +1,28 @@
+[package]
+name = "nemoir-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser-callable compiler API as WebAssembly. Owns the worker-side bridge between the Monaco DSL editor and the NemoIR compiler stack."
+repository = "https://github.com/hkalexling/nemoir"
+homepage = "https://github.com/hkalexling/nemoir"
+documentation = "https://github.com/hkalexling/nemoir/blob/master/docs/wasm-package.md"
+readme = "README.md"
+keywords = ["nemoir", "compiler", "wasm", "agent", "workflow"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+serde_json = "1"
+nemoir-dsl-fe = { path = "../nemoir-dsl-fe" }
+nemoir-ir = { path = "../nemoir-ir" }
+nemoir-backend-visualizer = { path = "../nemoir-backend-visualizer" }
+nemoir-backend-python = { path = "../nemoir-backend-python" }
+nemoir-backend-web = { path = "../nemoir-backend-web" }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

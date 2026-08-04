@@ -65,3 +65,83 @@ jobs:
             --output "$output_dir/web"
           test -f "$output_dir/web/hint-tutor/package.json"
           test -f "$output_dir/web/hint-tutor/src/workflow.json"
+
+  wasm:
+    name: WASM package build + JS smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: cargo check (wasm32 target)
+        run: cargo check -p nemoir-wasm --target wasm32-unknown-unknown
+
+      - name: wasm-pack build
+        run: >
+          wasm-pack build crates/nemoir-wasm
+          --target web --release
+          --scope nemoir
+
+      - name: Finalize npm package
+        run: node crates/nemoir-wasm/scripts/finalize-package.mjs crates/nemoir-wasm/pkg
+
+      - name: JS smoke test
+        run: node crates/nemoir-wasm/tests/package-smoke.mjs crates/nemoir-wasm/pkg
+
+      - name: npm pack dry-run
+        run: npm pack --dry-run --json
+        working-directory: crates/nemoir-wasm/pkg
+
+      - name: Pack tarball for consumer job
+        run: npm pack --pack-destination "${{ runner.temp }}"
+        working-directory: crates/nemoir-wasm/pkg
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: nemoir-compiler-wasm-tarball
+          path: ${{ runner.temp }}/*.tgz
+          retention-days: 1
+
+  vite-consumer:
+    name: Vite consumer proof (no Cargo)
+    runs-on: ubuntu-latest
+    needs: wasm
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: nemoir-compiler-wasm-tarball
+          path: ${{ runner.temp }}/tarballs
+
+      - name: Run Vite fixture (with prebuilt tarball)
+        shell: bash
+        run: |
+          tarball="$(ls "${{ runner.temp }}/tarballs"/*.tgz | head -1)"
+          node crates/nemoir-wasm/tests/run-vite-fixture.mjs --tarball "${tarball}"

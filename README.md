@@ -25,13 +25,16 @@ This repository contains the Rust compiler workspace:
 - `nemoir-ir` — Agent Workflow IR, capability catalog, and static validation.
 - `nemoir-dsl-fe` — the `.nemo` parser, resolver, validator, and lowerer.
 - `nemoir-cli` — the `nemo check` and `nemo compile` command-line interface.
+- `nemoir-wasm` — browser-callable compiler facade, packaged as `@nemoir/compiler-wasm`.
 - `nemoir-backend-visualizer` — standalone HTML workflow visualizations.
 - `nemoir-backend-python` — generated Python workflow packages.
 - `nemoir-backend-web` — generated Vite/TypeScript browser applications.
 
 The generated Python and web targets use their respective NemoIR runtime
 packages. The compiler remains backend-neutral: the validated IR is the
-boundary between workflow authoring and runtime execution.
+boundary between workflow authoring and runtime execution. The browser-hosted
+authoring application is a separate UI around the WASM facade; see the
+[Browser compiler guide](docs/browser-compiler.md).
 
 ## Prerequisites
 

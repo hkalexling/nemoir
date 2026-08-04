@@ -9,6 +9,7 @@ From the `compiler/` workspace root:
 - install the pinned Rust toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml) with `rustup`
 - have Python 3 available for the local Markdown link checker in [`../scripts/check_markdown_links.py`](../scripts/check_markdown_links.py)
 - use Node.js/npm only when you need to inspect generated web artifacts locally
+- when changing `nemoir-wasm`, install the `wasm32-unknown-unknown` Rust target, `wasm-pack`, and a current Node.js runtime
 
 Start with [Getting started](getting-started.md) if you have not built the workspace before.
 
@@ -24,6 +25,23 @@ cargo test --workspace
 ```
 
 For compiler-facing validation of the public examples, CI also runs `nemo check` on each example and compiles one representative artifact per backend.
+
+### WASM package changes
+
+Changes under `crates/nemoir-wasm/` should also exercise the browser package
+path used by CI:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo check -p nemoir-wasm --target wasm32-unknown-unknown
+wasm-pack build crates/nemoir-wasm --target web --release --scope nemoir
+node crates/nemoir-wasm/scripts/finalize-package.mjs crates/nemoir-wasm/pkg
+node crates/nemoir-wasm/tests/package-smoke.mjs crates/nemoir-wasm/pkg
+node crates/nemoir-wasm/tests/run-vite-fixture.mjs crates/nemoir-wasm/pkg
+```
+
+The generated `pkg/` directory is ignored. See [WASM compiler package](wasm-package.md)
+for release-specific checks.
 
 ## Public examples and fixtures
 

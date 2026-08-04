@@ -9,6 +9,7 @@ Status: the compiler crates in `compiler/` are experimental research interfaces.
 | [`../crates/nemoir-ir/`](../crates/nemoir-ir/) | Core IR types, capability catalog, and backend-neutral IR validation. |
 | [`../crates/nemoir-dsl-fe/`](../crates/nemoir-dsl-fe/) | `.nemo` parsing, name resolution, DSL validation, transition inference, and lowering to IR. |
 | [`../crates/nemoir-cli/`](../crates/nemoir-cli/) | Public `nemo check` and `nemo compile` entry points. |
+| [`../crates/nemoir-wasm/`](../crates/nemoir-wasm/) | Browser-callable WASM facade around the existing frontend, IR validator, and backends. |
 | [`../crates/nemoir-backend-visualizer/`](../crates/nemoir-backend-visualizer/) | Standalone HTML graph emission from validated IR. |
 | [`../crates/nemoir-backend-python/`](../crates/nemoir-backend-python/) | Python package generation from validated IR. |
 | [`../crates/nemoir-backend-web/`](../crates/nemoir-backend-web/) | Web-app generation plus web-specific compatibility validation. |
@@ -18,6 +19,14 @@ Useful source entry points:
 - [`../crates/nemoir-dsl-fe/src/lib.rs`](../crates/nemoir-dsl-fe/src/lib.rs)
 - [`../crates/nemoir-ir/src/lib.rs`](../crates/nemoir-ir/src/lib.rs)
 - [`../crates/nemoir-cli/src/main.rs`](../crates/nemoir-cli/src/main.rs)
+- [`../crates/nemoir-wasm/src/lib.rs`](../crates/nemoir-wasm/src/lib.rs)
+
+## Browser distribution facade
+
+`nemoir-wasm` is a distribution adapter, not a new language frontend or backend.
+It must call the existing library APIs, preserve the IR boundary, and keep
+browser-only UI, Worker, DOM, and ZIP behavior in the separate browser
+application. See [Browser compiler](browser-compiler.md).
 
 ## Safe extension principles
 
