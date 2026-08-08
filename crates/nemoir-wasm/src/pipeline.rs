@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn metadata_returns_expected_values() {
         let m = metadata();
-        assert_eq!(m.compiler_version, "0.1.0");
+        assert_eq!(m.compiler_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(m.ir_version, "0.1");
         assert_eq!(m.supported_targets.len(), 4);
         assert!(m.supported_targets.contains(&"none".to_string()));

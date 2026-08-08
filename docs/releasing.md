@@ -11,7 +11,7 @@ The single source of truth for the release version is
 
 ```toml
 [workspace.package]
-version = "0.1.0"
+version = "0.1.2"
 ```
 
 Every crate inherits that version via `version.workspace = true`. The npm
@@ -40,9 +40,9 @@ Releases are triggered by two events in
 ```bash
 # Bump version in Cargo.toml, then push to master.
 # The release workflow detects the change and publishes.
-sed -i 's/^version = "0\.1\.0"/version = "0.1.2"/' Cargo.toml
+sed -i 's/^version = "0\.1\.2"/version = "0.1.3"/' Cargo.toml
 git add Cargo.toml
-git commit -m "bump workspace version to 0.1.2"
+git commit -m "bump workspace version to 0.1.3"
 git push origin master
 ```
 

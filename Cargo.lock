@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-backend-python"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "nemoir-ir",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-backend-visualizer"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "nemoir-ir",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-backend-web"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "nemoir-dsl-fe",
@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-cli"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "clap",
  "miette",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-dsl-fe"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "miette",
@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-ir"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "indexmap",
  "serde",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "nemoir-wasm"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "nemoir-backend-python",
  "nemoir-backend-visualizer",
