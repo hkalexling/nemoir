@@ -626,11 +626,12 @@ jobs:
           else
             # No release yet: create tag + draft release in one call.
             echo "Creating draft release ${TAG} at ${SHA}"
-            gh release create "${TAG}" "${DIST_DIR}"/* \
+            gh release create "${TAG}" \
               --target "${SHA}" \
               --title "${TAG}" \
               --draft \
-              --generate-notes
+              --generate-notes \
+              "${DIST_DIR}"/*
           fi
 
           echo "✓ Draft release ${TAG} ready"
