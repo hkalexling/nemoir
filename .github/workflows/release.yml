@@ -558,7 +558,12 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           tag_sha=""
-          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags%2F${tag}" 2>/dev/null || true)"
+          tag_ref=""
+          if tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags%2F${tag}" 2>/dev/null)"; then
+            :
+          else
+            tag_ref=""
+          fi
           if [[ -n "${tag_ref}" ]]; then
             tag_sha="$(printf '%s' "${tag_ref}" | jq -r '.object.sha')"
             tag_type="$(printf '%s' "${tag_ref}" | jq -r '.object.type')"
