@@ -483,6 +483,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+      # ── Minimal checkout needed for `gh` release commands ───────
+      - uses: actions/checkout@v4
+
       # ── Setup Node with OIDC-capable npm ───────────────────────
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
