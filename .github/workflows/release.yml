@@ -480,7 +480,7 @@ jobs:
       id-token: write  # needed for npm OIDC token exchange
       attestations: write  # needed for public release-asset attestations
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
     steps:
       # ── Minimal checkout needed for `gh` release commands ───────
