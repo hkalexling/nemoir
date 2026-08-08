@@ -1,0 +1,686 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — build and validate artifacts but do not publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Prevent parallel releases — only one release workflow at a time.
+concurrency:
+  group: release-compiler-${{ github.repository }}
+  cancel-in-progress: false
+
+# ────────────────────────────────────────────────────────────────────────────
+# Jobs
+# ────────────────────────────────────────────────────────────────────────────
+#
+# version          — detect & validate workspace version, guard against
+#                    already-finalised releases, allow draft reruns
+# verify           — fmt, clippy, test, validate examples
+# wasm             — wasm-pack build, finalize, smoke-test, npm pack
+# vite-consumer    — Vite consumer proof using prebuilt tarball (no Rust)
+# native-linux-*   — native binary builds + smoke tests
+# native-macos-*
+# native-windows-*
+# publish          — npm publish (OIDC) + GitHub Release (only non-dry-run)
+#
+# The publish job never checks out the repository and never executes
+# un-reviewed code.  It only downloads prebuilt, CI-produced artifacts.
+# ────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  # ── Version detection ──────────────────────────────────────────────
+  version:
+    name: Detect version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      changed: ${{ steps.resolve.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed to inspect push "before" commit and all tags
+
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # ── Read current Cargo workspace version ────────────────
+          current="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p' Cargo.toml)"
+          if [[ -z "${current}" ]]; then
+            echo "ERROR: could not parse workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          # ── Validate simple SemVer X.Y.Z ───────────────────────
+          if ! echo "${current}" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "ERROR: version '${current}' is not valid SemVer X.Y.Z" >&2
+            exit 1
+          fi
+
+          # ── Determine whether version has changed ──────────────
+          declare changed="true"
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            before_sha="${{ github.event.before }}"
+
+            # An initial or force push has no reliable base for release intent.
+            if [[ "${before_sha}" =~ ^0+$ ]]; then
+              echo "Initial or force push — automatic release is intentionally skipped"
+              changed="false"
+            elif ! git cat-file -e "${before_sha}" 2>/dev/null; then
+              echo "WARNING: before commit ${before_sha} is unavailable — automatic release is skipped"
+              changed="false"
+            else
+              before_version="$(git show "${before_sha}:Cargo.toml" 2>/dev/null \
+                | sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p')"
+              if [[ -z "${before_version}" ]]; then
+                echo "ERROR: could not parse the previous workspace version" >&2
+                exit 1
+              fi
+              echo "previous=${before_version}" >> "$GITHUB_OUTPUT"
+
+              if [[ "${current}" == "${before_version}" ]]; then
+                echo "Version unchanged (${current}) — nothing to release."
+                changed="false"
+              else
+                semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+                if ! [[ "${before_version}" =~ ${semver_pattern} ]]; then
+                  echo "ERROR: expected previous version to be canonical SemVer X.Y.Z, got '${before_version}'" >&2
+                  exit 1
+                fi
+                IFS=. read -r previous_major previous_minor previous_patch <<< "${before_version}"
+                IFS=. read -r current_major current_minor current_patch <<< "${current}"
+                if (( current_major < previous_major ||
+                      (current_major == previous_major && current_minor < previous_minor) ||
+                      (current_major == previous_major && current_minor == previous_minor && current_patch <= previous_patch) )); then
+                  echo "ERROR: workspace version must increase: ${before_version} -> ${current}" >&2
+                  exit 1
+                fi
+                echo "Version changed: ${before_version} → ${current}"
+              fi
+            fi
+          fi
+
+          # ── Guard: check git tag / GitHub Release state ───────
+          if [[ "${changed}" != "true" ]]; then
+            echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+            echo "version=${current}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="v${current}"
+
+          if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_sha="$(git rev-parse "refs/tags/${tag}^{}")"
+
+            if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "ERROR: tag ${tag} already exists but points to ${tag_sha}," >&2
+              echo "       not the current commit ${GITHUB_SHA}.  Refusing." >&2
+              exit 1
+            fi
+
+            # Tag points to this commit — check whether a final
+            # (non-draft) release already exists.
+            if gh release view "${tag}" --json isDraft -q '.isDraft' 2>/dev/null | grep -qx 'false'; then
+              echo "ERROR: final (non-draft) GitHub Release ${tag} already exists." >&2
+              echo "       Refusing duplicate release." >&2
+              exit 1
+            fi
+
+            # Draft release at correct SHA — allow rerun.
+            echo "Draft release ${tag} exists at correct SHA — allowing rerun"
+          else
+            echo "No existing tag ${tag} — clean release"
+          fi
+
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+          echo "version=${current}" >> "$GITHUB_OUTPUT"
+          echo "✓ Release version: ${tag}"
+
+  # ── Verify (format, lint, test, examples) ─────────────────────────
+  verify:
+    name: Format, lint, test, examples
+    runs-on: ubuntu-latest
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check local Markdown links
+        run: python3 scripts/check_markdown_links.py README.md docs examples
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt, clippy
+          override: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Validate public examples
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo run --quiet --package nemoir-cli -- check examples/hello-workflow/hello.nemo
+          cargo run --quiet --package nemoir-cli -- check examples/policy-gated-edit/policy-gated-edit.nemo
+          cargo run --quiet --package nemoir-cli -- check examples/web-hint-tutor/hint-tutor.nemo
+
+          output_dir="$(mktemp -d)"
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/hello-workflow/hello.nemo \
+            --target visualizer \
+            --output "$output_dir/hello-workflow.html"
+          test -s "$output_dir/hello-workflow.html"
+
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/policy-gated-edit/policy-gated-edit.nemo \
+            --target python \
+            --output "$output_dir/python"
+          test -f "$output_dir/python/pyproject.toml"
+          test -f "$output_dir/python/policy_gated_edit/_agent.py"
+
+          cargo run --quiet --package nemoir-cli -- compile \
+            examples/web-hint-tutor/hint-tutor.nemo \
+            --target web \
+            --output "$output_dir/web"
+          test -f "$output_dir/web/hint-tutor/package.json"
+          test -f "$output_dir/web/hint-tutor/src/workflow.json"
+
+  # ── WASM build + smoke ────────────────────────────────────────────
+  wasm:
+    name: WASM package build + JS smoke
+    runs-on: ubuntu-latest
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+          target: wasm32-unknown-unknown
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: cargo check (wasm32 target)
+        run: cargo check -p nemoir-wasm --target wasm32-unknown-unknown
+
+      - name: wasm-pack build
+        run: >
+          wasm-pack build crates/nemoir-wasm
+          --target web --release
+          --scope nemoir
+
+      - name: Finalize npm package
+        run: node crates/nemoir-wasm/scripts/finalize-package.mjs crates/nemoir-wasm/pkg
+
+      - name: JS smoke test
+        run: node crates/nemoir-wasm/tests/package-smoke.mjs crates/nemoir-wasm/pkg
+
+      - name: Assert package version equals Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="${{ needs.version.outputs.version }}"
+          pkg_ver="$(node -e "console.log(require('./crates/nemoir-wasm/pkg/package.json').version)")"
+          if [[ "${cargo_ver}" != "${pkg_ver}" ]]; then
+            echo "ERROR: package.json version ${pkg_ver} != Cargo.toml version ${cargo_ver}" >&2
+            exit 1
+          fi
+          echo "✓ Version match: ${cargo_ver}"
+
+      - name: npm pack dry-run
+        run: npm pack --dry-run --json
+        working-directory: crates/nemoir-wasm/pkg
+
+      - name: Pack tarball
+        id: pack
+        working-directory: crates/nemoir-wasm/pkg
+        run: |
+          npm pack --pack-destination "${{ runner.temp }}"
+          tarball="$(ls "${{ runner.temp }}"/*.tgz | head -1)"
+          echo "tarball-name=$(basename "${tarball}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload WASM tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: nemoir-compiler-wasm-tarball
+          path: ${{ runner.temp }}/*.tgz
+          retention-days: 1
+
+  # ── Vite consumer proof ───────────────────────────────────────────
+  vite-consumer:
+    name: Vite consumer proof (no Cargo)
+    runs-on: ubuntu-latest
+    needs: [version, wasm]
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nemoir-compiler-wasm-tarball
+          path: ${{ runner.temp }}/tarballs
+
+      - name: Run Vite fixture (with prebuilt tarball)
+        shell: bash
+        run: |
+          tarball="$(ls "${{ runner.temp }}/tarballs"/*.tgz | head -1)"
+          node crates/nemoir-wasm/tests/run-vite-fixture.mjs --tarball "${tarball}"
+
+  # ── Native: Linux x86_64 ──────────────────────────────────────────
+  native-linux-x64:
+    name: Native — Linux x86_64
+    runs-on: ubuntu-latest
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+      - name: Build
+        run: cargo build --release --package nemoir-cli
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./target/release/nemo --help
+          ./target/release/nemo check examples/hello-workflow/hello.nemo
+      - name: Archive
+        run: |
+          mkdir -p artifacts
+          cp target/release/nemo artifacts/
+          cp LICENSE README.md artifacts/
+          tar -czf "nemo-linux-x86_64.tar.gz" -C artifacts nemo LICENSE README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-linux-x86_64
+          path: nemo-linux-x86_64.tar.gz
+          retention-days: 1
+
+  # ── Native: Linux aarch64 ────────────────────────────────────────
+  native-linux-arm64:
+    name: Native — Linux aarch64
+    runs-on: ubuntu-24.04-arm
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+      - name: Build
+        run: cargo build --release --package nemoir-cli
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./target/release/nemo --help
+          ./target/release/nemo check examples/hello-workflow/hello.nemo
+      - name: Archive
+        run: |
+          mkdir -p artifacts
+          cp target/release/nemo artifacts/
+          cp LICENSE README.md artifacts/
+          tar -czf "nemo-linux-aarch64.tar.gz" -C artifacts nemo LICENSE README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-linux-aarch64
+          path: nemo-linux-aarch64.tar.gz
+          retention-days: 1
+
+  # ── Native: macOS x86_64 ─────────────────────────────────────────
+  native-macos-x64:
+    name: Native — macOS x86_64
+    runs-on: macos-15-intel
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+      - name: Build
+        run: cargo build --release --package nemoir-cli
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./target/release/nemo --help
+          ./target/release/nemo check examples/hello-workflow/hello.nemo
+      - name: Archive
+        run: |
+          mkdir -p artifacts
+          cp target/release/nemo artifacts/
+          cp LICENSE README.md artifacts/
+          tar -czf "nemo-macos-x86_64.tar.gz" -C artifacts nemo LICENSE README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-macos-x86_64
+          path: nemo-macos-x86_64.tar.gz
+          retention-days: 1
+
+  # ── Native: macOS aarch64 ────────────────────────────────────────
+  native-macos-arm64:
+    name: Native — macOS aarch64
+    runs-on: macos-14
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+      - name: Build
+        run: cargo build --release --package nemoir-cli
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./target/release/nemo --help
+          ./target/release/nemo check examples/hello-workflow/hello.nemo
+      - name: Archive
+        run: |
+          mkdir -p artifacts
+          cp target/release/nemo artifacts/
+          cp LICENSE README.md artifacts/
+          tar -czf "nemo-macos-aarch64.tar.gz" -C artifacts nemo LICENSE README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-macos-aarch64
+          path: nemo-macos-aarch64.tar.gz
+          retention-days: 1
+
+  # ── Native: Windows x86_64 ───────────────────────────────────────
+  native-windows-x64:
+    name: Native — Windows x86_64
+    runs-on: windows-latest
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+      - name: Build
+        run: cargo build --release --package nemoir-cli
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & ./target/release/nemo.exe --help
+          & ./target/release/nemo.exe check examples/hello-workflow/hello.nemo
+      - name: Archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item target/release/nemo.exe artifacts/
+          Copy-Item LICENSE artifacts/
+          Copy-Item README.md artifacts/
+          Compress-Archive -Path artifacts/nemo.exe,artifacts/LICENSE,artifacts/README.md -DestinationPath nemo-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-windows-x86_64
+          path: nemo-windows-x86_64.zip
+          retention-days: 1
+
+  # ── Publish ───────────────────────────────────────────────────────
+  # This is the ONLY job with write permissions.  It does NOT check out
+  # the repository and does NOT execute any source code — it only
+  # downloads prebuilt artifacts from the jobs above.
+  publish:
+    name: Publish v${{ needs.version.outputs.version }}
+    runs-on: ubuntu-latest
+    needs:
+      - version
+      - verify
+      - wasm
+      - vite-consumer
+      - native-linux-x64
+      - native-linux-arm64
+      - native-macos-x64
+      - native-macos-arm64
+      - native-windows-x64
+    if: |
+      needs.version.outputs.changed == 'true' &&
+      (github.event_name == 'push' || inputs.dry_run == false)
+    environment: npm
+    permissions:
+      contents: write  # needed for GitHub Release + tag creation
+      id-token: write  # needed for npm OIDC token exchange
+      attestations: write  # needed for public release-asset attestations
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      # ── Setup Node with OIDC-capable npm ───────────────────────
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Require npm trusted-publishing support
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(npm --version)"
+          IFS=. read -r major minor patch <<< "${version}"
+          if (( major < 11 || (major == 11 && minor < 5) )); then
+            echo "npm ${version} is too old for trusted publishing; require >= 11.5.1" >&2
+            exit 1
+          fi
+
+      # ── Download prebuilt artifacts ────────────────────────────
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Collect and checksum
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+
+          mkdir -p dist
+
+          # Move native archives into dist/
+          for name in \
+            nemo-linux-x86_64 \
+            nemo-linux-aarch64 \
+            nemo-macos-x86_64 \
+            nemo-macos-aarch64 \
+            nemo-windows-x86_64; do
+            if [[ -d "artifacts/${name}" ]]; then
+              for f in "artifacts/${name}"/*; do
+                if [[ -f "${f}" ]]; then
+                  cp "${f}" "dist/$(basename "${f}")"
+                fi
+              done
+            fi
+          done
+
+          # Move WASM npm tarball into dist/
+          if [[ -d artifacts/nemoir-compiler-wasm-tarball ]]; then
+            for f in artifacts/nemoir-compiler-wasm-tarball/*.tgz; do
+              if [[ -f "${f}" ]]; then
+                cp "${f}" "dist/$(basename "${f}")"
+              fi
+            done
+          fi
+
+          # Generate SHA256SUMS
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+          echo "dist_dir=$(pwd)" >> "$GITHUB_OUTPUT"
+
+      # ── Confirm immutable registry/tag state before creating a draft ──
+      - name: Preflight immutable release state
+        id: preflight
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          tag_sha=""
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags%2F${tag}" 2>/dev/null || true)"
+          if [[ -n "${tag_ref}" ]]; then
+            tag_sha="$(printf '%s' "${tag_ref}" | jq -r '.object.sha')"
+            tag_type="$(printf '%s' "${tag_ref}" | jq -r '.object.type')"
+            if [[ "${tag_type}" == "tag" ]]; then
+              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.object.sha')"
+            fi
+            if [[ "${tag_sha}" != "${RELEASE_SHA}" ]]; then
+              echo "Tag ${tag} targets ${tag_sha}, not ${RELEASE_SHA}; refusing to reuse a version." >&2
+              exit 1
+            fi
+          fi
+
+          release_state="missing"
+          if draft="$(gh release view "${tag}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [[ "${draft}" == "true" ]]; then
+              release_state="draft"
+            else
+              release_state="final"
+            fi
+          fi
+          if [[ "${release_state}" == "final" ]]; then
+            echo "Final GitHub Release ${tag} already exists; refusing overwrite." >&2
+            exit 1
+          fi
+
+          npm_exists=false
+          if npm view "@nemoir/compiler-wasm@${VERSION}" version >/dev/null 2>&1; then
+            npm_exists=true
+          fi
+          already_published=false
+          if [[ "${npm_exists}" == "true" ]]; then
+            if [[ "${tag_sha}" == "${RELEASE_SHA}" && "${release_state}" == "draft" ]]; then
+              already_published=true
+              echo "npm version exists with a matching draft release; resuming finalization."
+            else
+              echo "@nemoir/compiler-wasm@${VERSION} already exists without a matching draft at this SHA; refusing." >&2
+              exit 1
+            fi
+          fi
+          echo "npm_already_published=${already_published}" >> "$GITHUB_OUTPUT"
+
+      # ── Create or update draft GitHub Release ──────────────────
+      - name: Create or update draft GitHub Release
+        id: draft-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          TAG="v${VERSION}"
+          SHA="${{ github.sha }}"
+          DIST_DIR="${{ steps.collect.outputs.dist_dir }}"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            # Draft release exists — upload (overwrite) assets.
+            echo "Draft release ${TAG} already exists — uploading assets"
+            gh release upload "${TAG}" "${DIST_DIR}"/* --clobber
+          else
+            # No release yet: create tag + draft release in one call.
+            echo "Creating draft release ${TAG} at ${SHA}"
+            gh release create "${TAG}" "${DIST_DIR}"/* \
+              --target "${SHA}" \
+              --title "${TAG}" \
+              --draft \
+              --generate-notes
+          fi
+
+          echo "✓ Draft release ${TAG} ready"
+
+      # ── Publish WASM package to npm ────────────────────────────
+      - name: Publish WASM package to npm
+        id: npm-publish
+        if: steps.preflight.outputs.npm_already_published != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          DIST_DIR="${{ steps.collect.outputs.dist_dir }}"
+
+          tarball="$(ls "${DIST_DIR}"/*.tgz | head -1)"
+          if [[ ! -f "${tarball}" ]]; then
+            echo "ERROR: WASM tarball not found in ${DIST_DIR}" >&2
+            exit 1
+          fi
+
+          npm publish "${tarball}" --access public --ignore-scripts
+          echo "✓ Published @nemoir/compiler-wasm@${VERSION} to npm"
+
+      - name: Attest release archives
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.tgz
+
+      # ── Finalize (un-draft) GitHub Release ─────────────────────
+      - name: Publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.version.outputs.version }}"
+
+          if gh release view "${TAG}" --json isDraft -q '.isDraft' 2>/dev/null | grep -qx 'true'; then
+            gh release edit "${TAG}" --draft=false
+            echo "✓ Published GitHub Release ${TAG}"
+          else
+            # Already finalised — idempotent re-run.
+            echo "Release ${TAG} is already published — nothing to do"
+          fi
+
+      # ── Step summary ───────────────────────────────────────────
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Release v${{ needs.version.outputs.version }} complete"
+            echo ""
+            echo "| Asset |"
+            echo "|-------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cd "${{ steps.collect.outputs.dist_dir }}"
+          for f in *; do
+            echo "| \`${f}\` |" >> "$GITHUB_STEP_SUMMARY"
+          done

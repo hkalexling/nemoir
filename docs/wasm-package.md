@@ -96,9 +96,16 @@ Measure again after every compiler dependency change with:
 node crates/nemoir-wasm/scripts/measure-package-size.mjs crates/nemoir-wasm/pkg
 ```
 
-## Release checklist
+## Release workflow
 
-Before publishing to npm:
+Releases are fully automated via
+[`.github/workflows/release.yml`](../.github/workflows/release.yml).
+See [Releasing](releasing.md) for the canonical version source, trigger
+rules, binary matrix, OIDC setup, and manual dry-run instructions.
+
+### Automated checks (run in CI on every release)
+
+The release workflow runs these checks before any publish step:
 
 - [ ] All native compiler tests pass (`cargo test --workspace`).
 - [ ] `cargo check -p nemoir-wasm --target wasm32-unknown-unknown` passes.
@@ -106,20 +113,32 @@ Before publishing to npm:
 - [ ] Smoke test (24 checks) passes.
 - [ ] Vite consumer fixture builds without Rust/Cargo.
 - [ ] `npm pack --dry-run` shows expected files.
-- [ ] `size-baseline.json` is up to date.
-- [ ] The npm package version and compiler metadata version are intentionally
-      recorded for the release; never republish an existing npm version.
+- [ ] Package version equals workspace Cargo version (asserted at build time).
 
-Publish with:
+### Local pre-release verification
+
+Before bumping the workspace version, run these locally to catch
+issues early:
 
 ```bash
-cd crates/nemoir-wasm/pkg
-npm publish --access public
+# Rust checks
+cargo test --workspace
+cargo check -p nemoir-wasm --target wasm32-unknown-unknown
+
+# WASM package path
+wasm-pack build crates/nemoir-wasm --target web --release --scope nemoir
+node crates/nemoir-wasm/scripts/finalize-package.mjs crates/nemoir-wasm/pkg
+node crates/nemoir-wasm/tests/package-smoke.mjs crates/nemoir-wasm/pkg
+node crates/nemoir-wasm/tests/run-vite-fixture.mjs crates/nemoir-wasm/pkg
+
+# Size baseline (update before releasing)
+node crates/nemoir-wasm/scripts/measure-package-size.mjs crates/nemoir-wasm/pkg
 ```
 
-Do not publish a package version whose compiler source has not passed CI.
-The npm package version and the compiler metadata version are separate release
-facts and should be checked together.
+Never manually publish — the automated workflow is the only supported
+path to npm and GitHub Releases.  It ensures the npm version, binary
+archives and checksums are always consistent; public-source releases also receive
+provenance attestations.
 
 ## Version compatibility
 

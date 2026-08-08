@@ -14,6 +14,7 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 - [Web target guide](targets/web.md)
 - [Browser compiler](browser-compiler.md)
 - [WASM compiler package](wasm-package.md)
+- [Releasing](releasing.md)
 - [Safety and limitations](safety-and-limitations.md)
 - [Compatibility](compatibility.md)
 - [Troubleshooting](troubleshooting.md)
