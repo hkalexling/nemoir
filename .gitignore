@@ -1,2 +1,2 @@
-target
-crates/nemoir-wasm/pkg/
+# macOS
+.DS_Store

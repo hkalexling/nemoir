@@ -9,8 +9,6 @@ can be inspected and lowered to multiple runtime targets.
 > may evolve; it is not presented as a production agent platform or a security
 > guarantee.
 
-For user-facing compiler documentation, start with [docs/README.md](docs/README.md).
-
 ```text
 .nemo workflow → DSL frontend → Agent Workflow IR → validation → backends
                                                              ├─ HTML visualizer
@@ -18,74 +16,27 @@ For user-facing compiler documentation, start with [docs/README.md](docs/README.
                                                              └─ browser application
 ```
 
-## What is here
+## Getting started
 
-This repository contains the Rust compiler workspace:
+For user-facing compiler documentation, start with [docs/README.md](docs/README.md).
 
-- `nemoir-ir` — Agent Workflow IR, capability catalog, and static validation.
-- `nemoir-dsl-fe` — the `.nemo` parser, resolver, validator, and lowerer.
-- `nemoir-cli` — the `nemo check` and `nemo compile` command-line interface.
-- `nemoir-wasm` — browser-callable compiler facade, packaged as `@nemoir/compiler-wasm`.
-- `nemoir-backend-visualizer` — standalone HTML workflow visualizations.
-- `nemoir-backend-python` — generated Python workflow packages.
-- `nemoir-backend-web` — generated Vite/TypeScript browser applications.
+### Download the compiler
 
-The generated Python and web targets use their respective NemoIR runtime
-packages. The compiler remains backend-neutral: the validated IR is the
-boundary between workflow authoring and runtime execution. The browser-hosted
-authoring application is a separate UI around the WASM facade; see the
-[Browser compiler guide](docs/browser-compiler.md).
+Prebuilt `nemo` binaries are available on the [GitHub Releases](../../releases) page for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64).
 
-## Prerequisites
+### npm package
 
-Rust is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Install it via
-[rustup](https://rustup.rs/), then clone and build this repository:
+The browser-callable compiler facade is published as [`@nemoir/compiler-wasm`](https://www.npmjs.com/package/@nemoir/compiler-wasm) on npm.
 
 ```bash
-git clone https://github.com/hkalexling/nemoir.git
-cd nemoir
-cargo build --release
+npm install @nemoir/compiler-wasm
 ```
 
-The compiler binary is `target/release/nemo`. To install it into your Cargo
-bin directory instead:
-
-```bash
-cargo install --path crates/nemoir-cli
-```
-
-## Quick start
-
-Validate a workflow:
-
-```bash
-cargo run --package nemoir-cli -- check examples/hello-workflow/hello.nemo
-```
-
-Lower it to IR and render a standalone workflow graph:
-
-```bash
-cargo run --package nemoir-cli -- compile \
-  examples/hello-workflow/hello.nemo \
-  --target visualizer \
-  --output /tmp/hello-workflow.html \
-  --dump-ir
-```
-
-The CLI supports these compilation targets:
-
-| Target | Output |
-| --- | --- |
-| `none` | Validate and lower only; optionally print YAML IR with `--dump-ir`. |
-| `visualizer` | A standalone HTML workflow graph. |
-| `python` | An installable, typed Python workflow package. |
-| `web` | A Vite/TypeScript browser application using the NemoIR web runtime. |
-
-Run `nemo --help` or `nemo compile --help` for the complete CLI surface.
+See the [WASM compiler package guide](docs/wasm-package.md) for usage details.
 
 ## Examples
 
-The curated, public workflow examples live in [`examples/`](examples/):
+Curated workflow examples live in [`examples/`](examples/):
 
 - [`hello-workflow`](examples/hello-workflow/) — the smallest model-driven
   workflow and the recommended first compiler invocation.
@@ -94,15 +45,18 @@ The curated, public workflow examples live in [`examples/`](examples/):
 - [`web-hint-tutor`](examples/web-hint-tutor/) — a browser-compatible workflow
   that demonstrates conditional transitions and user elicitation.
 
-Every example is checked by CI so its documented syntax stays valid.
+## Documentation
 
-## Development
-
-```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+- [Getting started](docs/getting-started.md)
+- [DSL and IR reference](docs/dsl-and-ir.md)
+- [Writing workflows](docs/writing-workflows.md)
+- [CLI reference](docs/cli.md)
+- [WASM package](docs/wasm-package.md)
+- [Browser compiler](docs/browser-compiler.md)
+- [Backend targets](docs/targets/)
+- [Compatibility](docs/compatibility.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Extending the compiler](docs/extending.md)
 
 ## License
 

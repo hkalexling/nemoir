@@ -1,8 +1,0 @@
-{
-  "measuredAt": "2026-08-04T10:39:50.726Z",
-  "nodeVersion": "v24.18.0",
-  "file": "nemoir_wasm_bg.wasm",
-  "rawBytes": 1155215,
-  "gzipLevel9Bytes": 399900,
-  "brotliQuality11Bytes": 289995
-}
