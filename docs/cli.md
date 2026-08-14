@@ -28,7 +28,7 @@ On success it prints `OK: <file>`.
 Example:
 
 ```bash
-cargo run --package nemoir-cli -- check examples/hello-workflow/hello.nemo
+nemo check examples/hello-workflow/hello.nemo
 ```
 
 ## `nemo compile`
@@ -54,7 +54,7 @@ Supported targets:
 | --- | --- |
 | `none` | Default. Validate and lower only. With `--dump-ir`, emit YAML IR to stdout. |
 | `visualizer` | Generate a standalone HTML workflow graph. |
-| `python` | Generate an installable Python workflow package. |
+| `python` | Generate a Python workflow package. |
 | `web` | Generate a Vite/TypeScript browser app. |
 
 ### Output rules
@@ -67,25 +67,25 @@ Supported targets:
 
 ### Web-only dependency overrides
 
-For local development against unpublished runtime checkouts, `nemo compile --target web` also accepts:
+For local integration work, `nemo compile --target web` also accepts:
 
 - `--web-runtime-dependency <spec>`
 - `--web-ui-dependency <spec>`
 
-These override the dependency strings written into the generated `package.json`.
+These flags override the dependency strings written into the generated `package.json`.
 
 ## Common commands
 
 Validate a workflow:
 
 ```bash
-cargo run --package nemoir-cli -- check examples/hello-workflow/hello.nemo
+nemo check examples/hello-workflow/hello.nemo
 ```
 
 Print lowered IR without generating an artifact:
 
 ```bash
-cargo run --package nemoir-cli -- compile \
+nemo compile \
   examples/hello-workflow/hello.nemo \
   --dump-ir
 ```
@@ -93,7 +93,7 @@ cargo run --package nemoir-cli -- compile \
 Generate a Python package:
 
 ```bash
-cargo run --package nemoir-cli -- compile \
+nemo compile \
   examples/policy-gated-edit/policy-gated-edit.nemo \
   --target python \
   --output /tmp/nemoir-python-example
@@ -102,7 +102,7 @@ cargo run --package nemoir-cli -- compile \
 Generate a web app:
 
 ```bash
-cargo run --package nemoir-cli -- compile \
+nemo compile \
   examples/web-hint-tutor/hint-tutor.nemo \
   --target web \
   --output /tmp/nemoir-web-example

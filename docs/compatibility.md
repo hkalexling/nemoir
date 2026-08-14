@@ -14,8 +14,8 @@ The current Agent Workflow IR version is `0.1`.
 | --- | --- | --- |
 | `none` | No artifact | Useful for lowering and optional IR dumping only. |
 | `visualizer` | Standalone HTML file | No separate NemoIR runtime package is required for the generated HTML artifact. |
-| `python` | Python package | Generated `pyproject.toml` requires Python `>=3.11` and `nemoir-runtime>=0.9.2`. |
-| `web` | Vite/TypeScript app | Generated `package.json` uses `@nemoir/web-runtime` `^0.4.0` and `@nemoir/web-ui` `^0.2.0` by default. |
+| `python` | Python package | Generated `pyproject.toml` currently requires Python `>=3.11` and [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) `>=0.9.2`. |
+| `web` | Vite/TypeScript app | Generated `package.json` currently uses [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) `^0.4.0` and [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui) `^0.2.0` by default. |
 
 ## Web target compatibility
 
@@ -43,6 +43,6 @@ The public examples reflect current target intent:
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) is Python-oriented and not web-compatible because it uses `path`, `fs.read`, and `fs.write`.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is web-compatible and also serves as a good frontend validation example.
 
-## Documentation boundaries
+## Documentation boundary
 
-This page records compiler-emitted dependency and compatibility facts. It does not duplicate runtime API documentation. When target-specific runtime docs are available, link to them from compiler docs rather than copying their package APIs here.
+This page records compiler-emitted dependency and compatibility facts. It does not duplicate runtime or package API documentation.

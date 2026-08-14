@@ -1,8 +1,8 @@
 # NemoIR examples
 
-These are small, self-contained workflows intended for learning and public
-compiler validation. They do not include provider credentials, generated
-packages, or runtime-specific setup.
+These are small, self-contained workflows intended for learning and public compiler validation. They do not include provider credentials, generated packages, or runtime-specific setup.
+
+All commands below assume the `nemo` binary is already installed and available on your `PATH`.
 
 | Example | Demonstrates | Suitable target |
 | --- | --- | --- |
@@ -10,14 +10,12 @@ packages, or runtime-specific setup.
 | [`policy-gated-edit`](policy-gated-edit/) | Capability declarations and `before`/`deny` policies | `python` |
 | [`web-hint-tutor`](web-hint-tutor/) | Conditional transitions and browser-safe user elicitation | `web` |
 
-Validate every example from the compiler repository root:
+Validate the canonical public examples from the repository root:
 
 ```bash
-for workflow in examples/*/*.nemo; do
-  cargo run --package nemoir-cli -- check "$workflow"
-done
+nemo check examples/hello-workflow/hello.nemo
+nemo check examples/policy-gated-edit/policy-gated-edit.nemo
+nemo check examples/web-hint-tutor/hint-tutor.nemo
 ```
 
-The CI workflow also compiles one representative artifact for each supported
-backend. Keep new examples small, deterministic to compile, and free of
-private data or credentials.
+The CI workflow also compiles one representative artifact for each supported backend. Keep new examples small, deterministic to compile, and free of private data or credentials.

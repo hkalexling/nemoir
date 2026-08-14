@@ -22,17 +22,11 @@ For user-facing compiler documentation, start with [docs/README.md](docs/README.
 
 ### Download the compiler
 
-Prebuilt `nemo` binaries are available on the [GitHub Releases](../../releases) page for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64).
+Prebuilt `nemo` binaries are available on the [GitHub Releases](https://github.com/hkalexling/nemoir/releases) page for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64).
 
 ### npm package
 
-The browser-callable compiler facade is published as [`@nemoir/compiler-wasm`](https://www.npmjs.com/package/@nemoir/compiler-wasm) on npm.
-
-```bash
-npm install @nemoir/compiler-wasm
-```
-
-See the [WASM compiler package guide](docs/wasm-package.md) for usage details.
+The browser-callable compiler facade is published as [`@nemoir/compiler-wasm`](https://www.npmjs.com/package/@nemoir/compiler-wasm) on npm. Its npm page is the canonical public source for package metadata and API details.
 
 ## Examples
 

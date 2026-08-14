@@ -16,8 +16,8 @@ Common patterns:
 | --- | --- | --- |
 | parse error near `==` or `!=` | numeric equality is not part of the current DSL | Use ordering comparisons instead and check [DSL and IR](dsl-and-ir.md). |
 | unknown stage, output field, or workflow input | a reference does not resolve | Compare names against the source workflow and the small examples in [`../examples/`](../examples/). |
-| unknown capability | the capability is not in the current catalog | Check the catalog in [DSL and IR](dsl-and-ir.md) and [`../crates/nemoir-ir/src/capabilities.rs`](../crates/nemoir-ir/src/capabilities.rs). |
-| missing or unknown `exec:` arg | the deterministic stage does not match the capability signature | Check [`../crates/nemoir-dsl-fe/tests/exec_stages.rs`](../crates/nemoir-dsl-fe/tests/exec_stages.rs) and the capability catalog. |
+| unknown capability | the capability is not in the current catalog | Check the catalog in [DSL and IR](dsl-and-ir.md). |
+| missing or unknown `exec:` arg | the deterministic stage does not match the capability signature | Recheck the capability declaration and compare with the public examples. |
 | unreachable stage, ambiguous backward reference, or transition error | inferred control flow is not valid | Make transitions explicit or simplify the stage graph; [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is the best public branching example. |
 
 If `nemo check` passes but `nemo compile` fails before target generation, the lowered IR or a backend-neutral rule is the likely issue.
@@ -26,10 +26,9 @@ Useful references:
 
 - [DSL and IR](dsl-and-ir.md)
 - [Safety and limitations](safety-and-limitations.md)
-- [`../crates/nemoir-dsl-fe/tests/invalid_dsls.rs`](../crates/nemoir-dsl-fe/tests/invalid_dsls.rs)
-- [`../crates/nemoir-ir/tests/validate_tests.rs`](../crates/nemoir-ir/tests/validate_tests.rs)
+- [Writing workflows](writing-workflows.md)
 
-## Python target and runtime integration
+## Python target issues
 
 If `nemo compile --target python` fails, first read [Python target guide](targets/python.md).
 
@@ -37,14 +36,13 @@ Common patterns:
 
 | Symptom | Usually means | What to check next |
 | --- | --- | --- |
-| compile error about workflow id or generated field names | the workflow id, input id, or exit-output field cannot become a Python identifier | Follow the naming rules in [Python target guide](targets/python.md). |
-| generated package will not install | the local Python environment does not meet the generated package requirements | Use Python `>=3.11` and install in a fresh virtual environment. |
-| generated package imports but cannot run a workflow | the compiler emitted a package, but no model or tools were supplied at runtime | Wire the generated package into the public runtime and register the workflow's declared capabilities. |
-| looking for runtime classes or tool APIs | those live outside the compiler repo | Use the public [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) repository instead of expecting compiler docs to duplicate that API. |
+| compile error about workflow id or generated field names | the workflow id, input id, or exit-output field cannot become a valid Python name | Follow the naming rules in [Python target guide](targets/python.md). |
+| generated package metadata looks wrong | the compiler emitted the package, but the workflow-derived names or dependency expectations are not what you expected | Inspect the emitted `pyproject.toml` and generated package directory. |
+| post-compile runtime questions | the compiler emitted a package, but execution setup belongs to the runtime layer | Use the public [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) docs. |
 
 A good compiler-only sanity check is to compile [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) and confirm that `pyproject.toml` and the generated package directory are written.
 
-## Web target and environment problems
+## Web target issues
 
 If `nemo compile --target web` fails, start with [Web target guide](targets/web.md) and [Compatibility](compatibility.md).
 
@@ -54,11 +52,12 @@ Common patterns:
 | --- | --- | --- |
 | compile error mentioning `fs.read`, `fs.write`, `os.shell`, or `path` | the workflow is valid IR, but not web-compatible | The web backend accepts a narrower capability and type subset; compare with [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/). |
 | compile error about `browser.js.run` or `browser.js.sandbox` | the JavaScript capability is being used outside the web backend's contract | Recheck the deterministic-stage-only rules and approval-policy rules in [Web target guide](targets/web.md). |
-| `npm install` or `npm run dev` fails in a generated app | the local Node.js/npm environment is missing or mismatched | Run commands inside the generated app directory and inspect the emitted `package.json`. |
-| app loads but model stages do not run | the browser environment does not provide WebGPU or the required isolation headers | Follow the local and deployment requirements in [Web target guide](targets/web.md). |
-| deterministic-only workflow still needs browser checks | deterministic-only web workflows do not need WebGPU, but they still need a working browser/Node toolchain | Use a minimal workflow first, then add model stages later. |
+| generated `package.json` dependency strings are not what you expected | you may need different compile-time dependency overrides for integration work | Recheck `--web-runtime-dependency` and `--web-ui-dependency` in [CLI reference](cli.md). |
+| post-compile runtime or UI questions | the compiler emitted source successfully, but running it belongs to the public runtime and UI packages | Use the public [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) and [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui) pages. |
 
-Runtime and UI package APIs live in their public repositories:
+## Browser compiler questions
 
-- [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime)
-- [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui)
+For the browser editor application and the published WASM package, start with:
+
+- [Browser compiler](browser-compiler.md)
+- [WASM compiler package](wasm-package.md)

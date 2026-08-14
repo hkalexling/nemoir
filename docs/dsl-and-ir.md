@@ -1,28 +1,23 @@
 # The `.nemo` DSL and Agent Workflow IR
 
-Status: public normative reference for the current NemoIR compiler pilot.
-This document describes the semantics implemented by the compiler in this
-repository. When this document and the compiler diverge, the implementation and
-its tests are the source of truth until the document is updated.
+Status: public normative reference for released NemoIR compiler behavior.
+This document defines the supported public `.nemo` authoring surface, its
+lowering semantics, and the resulting Agent Workflow IR contract.
+Implementation files, private fixtures, and internal source layout are not part
+of the public reference.
 
-Primary implementation sources:
-
-- Grammar: [`../crates/nemoir-dsl-fe/src/grammar.pest`](../crates/nemoir-dsl-fe/src/grammar.pest)
-- DSL frontend validation and transition inference: [`../crates/nemoir-dsl-fe/src/validate.rs`](../crates/nemoir-dsl-fe/src/validate.rs)
-- DSL resolution and lowering: [`../crates/nemoir-dsl-fe/src/resolve.rs`](../crates/nemoir-dsl-fe/src/resolve.rs), [`../crates/nemoir-dsl-fe/src/lower.rs`](../crates/nemoir-dsl-fe/src/lower.rs)
-- IR types: [`../crates/nemoir-ir/src/lib.rs`](../crates/nemoir-ir/src/lib.rs)
-- IR validation: [`../crates/nemoir-ir/src/validate.rs`](../crates/nemoir-ir/src/validate.rs)
-- Capability catalog: [`../crates/nemoir-ir/src/capabilities.rs`](../crates/nemoir-ir/src/capabilities.rs)
-
-Useful public examples and fixtures:
+Useful public examples and reference fixtures:
 
 - [`../examples/hello-workflow/hello.nemo`](../examples/hello-workflow/hello.nemo)
 - [`../examples/policy-gated-edit/policy-gated-edit.nemo`](../examples/policy-gated-edit/policy-gated-edit.nemo)
 - [`../examples/web-hint-tutor/hint-tutor.nemo`](../examples/web-hint-tutor/hint-tutor.nemo)
-- [`../crates/nemoir-dsl-fe/tests/fixtures/coding-agent.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/coding-agent.nemo)
-- [`../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate.nemo)
-- [`../crates/nemoir-dsl-fe/tests/fixtures/policy_command_allowlist.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/policy_command_allowlist.nemo)
-- Lowered IR fixtures: [`../crates/nemoir-dsl-fe/tests/fixtures/coding-agent-ir.yml`](../crates/nemoir-dsl-fe/tests/fixtures/coding-agent-ir.yml), [`../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate-ir.yml`](../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate-ir.yml)
+- [`../examples/reference-fixtures/coding-agent.nemo`](../examples/reference-fixtures/coding-agent.nemo)
+- [`../examples/reference-fixtures/coding-agent-ir.yml`](../examples/reference-fixtures/coding-agent-ir.yml)
+- [`../examples/reference-fixtures/judge_candidate.nemo`](../examples/reference-fixtures/judge_candidate.nemo)
+- [`../examples/reference-fixtures/judge_candidate-ir.yml`](../examples/reference-fixtures/judge_candidate-ir.yml)
+- [`../examples/reference-fixtures/policy_command_allowlist.nemo`](../examples/reference-fixtures/policy_command_allowlist.nemo)
+- [`../examples/reference-fixtures/hint_tutor.nemo`](../examples/reference-fixtures/hint_tutor.nemo)
+- [`../examples/reference-fixtures/hint_tutor-ir.yml`](../examples/reference-fixtures/hint_tutor-ir.yml)
 
 ## 1. Compiler model
 
@@ -39,13 +34,6 @@ lowers the result into a target-neutral IR.
 ## 2. DSL surface
 
 A `.nemo` file declares one workflow.
-
-```ebnf
-workflow  = "workflow" ident "{" input_block? policy_block? stage* "}"
-ident     = ASCII_ALPHA (ASCII_ALPHANUMERIC | "_")*
-```
-
-Line comments use `//`.
 
 High-level structure:
 
@@ -69,8 +57,11 @@ Notes:
 - If no stage is marked `@exit`, the last stage becomes an exit stage.
 - Multiple `@entry` stages are invalid.
 - Multiple `@exit` stages are allowed.
+- Line comments use `//` and run to the end of the line.
 - Within a stage, each of `prompt:`, `input:`, `output:`, `requires:`, and
   `exec:` may appear at most once.
+- The grammar accepts any `@ident` annotation spelling; released compiler
+  behavior recognizes only `@entry` and `@exit`.
 
 ## 3. Types and literals
 
@@ -84,12 +75,7 @@ Supported base types are:
 - `number`
 - `json`
 
-A type reference is:
-
-```text
-type_ref = type_base array_marker? optional_marker?
-```
-
+A type reference is a base type with optional array and optional markers.
 Examples:
 
 - `string`
@@ -104,15 +90,15 @@ Current restrictions:
 - Unknown type names are rejected.
 - In the IR, optionality is stored separately from the base type string.
 
-### 3.2 Strings and JSON
+### 3.2 Strings
 
-The grammar distinguishes three common cases:
+The DSL distinguishes three common string contexts:
 
-- Prompt strings: `"..."` or `"""..."""`
-- Policy string literals: `"..."`
-- Deterministic `exec:` arguments: strings or structured JSON literals
+- prompt strings: `"..."` or `"""..."""`
+- policy string literals: `"..."`
+- deterministic `exec:` string arguments: `"..."` or `"""..."""`
 
-Actual parser behavior matters:
+Current behavior:
 
 - Prompt strings are trimmed.
 - Multi-line prompt strings are additionally trimmed line-by-line.
@@ -120,17 +106,25 @@ Actual parser behavior matters:
   is unescaped.
 - Multi-line `exec:` strings preserve their interior content verbatim after the
   outer `"""` delimiters are stripped.
-- JSON exec literals are parsed structurally as objects, arrays, strings,
-  numbers, booleans, or `null`.
+- In non-JSON DSL strings, `\"` is the only escape sequence.
+
+### 3.3 Numbers and structured JSON exec literals
+
+The DSL has two numeric surfaces:
+
+- Policy and transition number literals support integers and decimal fractions.
+- Structured JSON literals in `exec:` arguments additionally support exponent
+  notation such as `1e6`, `3.5E-2`, and `-2E+4`.
+
+Structured JSON exec literals are available for `json`-typed deterministic
+arguments and may be objects, arrays, strings, numbers, booleans, or `null`.
+Current public behavior is JSON-shaped but narrower than full JSON string
+escaping: JSON strings accept plain characters and `\"`, but other backslash
+escapes are not part of the DSL surface.
 
 ## 4. Stages
 
 A stage is either model-driven or deterministic.
-
-```ebnf
-stage = "stage" annotation? ident "{" stage_body_item* "}"
-annotation = "@entry" | "@exit"
-```
 
 ### 4.1 Model stages
 
@@ -154,7 +148,10 @@ stage ReadConfig {
 Semantics:
 
 - No model call occurs for the stage.
-- `prompt:` is optional. If omitted, the lowered IR prompt is the empty string.
+- `prompt:` is optional.
+- If omitted, the lowered IR prompt is the empty string.
+- If present, the prompt is documentation-only; it is preserved in IR but does
+  not change the stage into a model call.
 - The exec capability is auto-added to the stage's `requires` list if missing.
 - The exec capability is also auto-added to top-level IR `capabilities`.
 - `Stage.field` refs used in exec args are auto-added to the stage's reads.
@@ -165,7 +162,7 @@ Exec arg values currently support only:
 - prior stage output refs: `Stage.field`
 - string literals
 - multi-line string literals
-- JSON literals
+- structured JSON literals
 
 Expressions such as arithmetic, boolean operators, method calls, and bound refs
 are rejected in exec args.
@@ -327,7 +324,8 @@ http.fetch(url, method)
 ```
 
 In the DSL, the identifiers inside the trigger become bound variables for that
-policy. Their types are inferred from the capability catalog.
+policy. Their types are inferred from the normative capability catalog in
+Section 8.
 
 Only required catalog parameters are bindable.
 
@@ -361,19 +359,23 @@ Policy conditions may not reference stage outputs.
 
 ## 7. Policy expression language
 
-### 7.1 Operators
+### 7.1 Operators and precedence
 
-The parser supports:
+From highest to lowest precedence, the parser supports:
 
-- unary `-`
-- `*`, `/`
-- `+`, `-`
-- `>`, `>=`, `<`, `<=`
-- `not`
-- `and`
-- `or`
+1. parentheses and primaries
+2. unary `-`
+3. `*`, `/`
+4. `+`, `-`
+5. `>`, `>=`, `<`, `<=`
+6. `not`
+7. `and`
+8. `or`
+
+Additional forms:
+
 - method calls on a bare receiver identifier
-- `in [ ... ]`
+- `in [ ... ]` on a bare receiver identifier
 
 `==` and `!=` are not part of the grammar.
 
@@ -397,6 +399,9 @@ Rejected combinations include:
 - `contains` or `eq` on `bool`, `number`, `json`, or arrays
 - wrong arity for any method
 
+The receiver must be a bare identifier, not `Stage.field` and not an arbitrary
+subexpression.
+
 ### 7.3 `in [ ... ]`
 
 `x in [a, b, c]` is DSL sugar.
@@ -404,6 +409,7 @@ Rejected combinations include:
 - It is allowed in policy conditions.
 - It lowers to an `or` of `eq` method calls.
 - Empty lists are rejected.
+- The left-hand side must be a bare identifier.
 - Type compatibility follows the same rules as `eq`.
 - Numeric `in` is not supported.
 
@@ -422,9 +428,11 @@ Validation rules:
 - boolean operators require boolean operands
 - `not` requires a boolean operand
 
-## 8. Capability catalog
+<!-- normative-capability-catalog:start -->
+## 8. Normative capability catalog
 
-The core catalog is a closed set of ten capability names.
+This section is the normative public capability catalog for released NemoIR DSL
+and IR authoring. The core catalog is a closed set of ten capability names.
 
 | Capability | Required params | Optional params |
 | --- | --- | --- |
@@ -442,13 +450,28 @@ The core catalog is a closed set of ten capability names.
 Catalog notes:
 
 - The catalog fixes capability names and parameter shapes, not return schemas.
-- Optional catalog params are valid exec args but are not bindable in policy
-  triggers.
-- `CapabilityParamType::Bool` exists in the core type enum, but no catalog entry
+- Only required parameters are policy-bindable. In `before fs.write(path)` the
+  bound name `path` is valid because `path` is a required catalog parameter of
+  `fs.write`.
+- Optional parameters are valid in deterministic `exec:` argument lists but are
+  not bindable in policy triggers or policy-required capability parameter lists.
+- `http.fetch(headers: ...)` and `http.fetch(body: ...)` are therefore valid in
+  deterministic `exec:` stages, but `before http.fetch(url, method, headers)` is
+  not part of the public DSL surface.
+- `browser.js.run` is for trusted workflow-author code and, on the web target,
+  requires `code` to be a compile-time string literal in `exec:`. Input or
+  output refs are not allowed for that parameter.
+- `browser.js.sandbox` is the explicit dynamic-code path. On the web target, its
+  `code` argument may come from a workflow input or a prior stage output,
+  subject to deterministic-stage-only and approval-policy rules.
+- For web-target safety, approval, and isolation details, see the
+  [Web target guide](targets/web.md).
+- The compiler has a boolean capability-parameter type, but no catalog entry
   currently uses it.
 
 Bound-variable types in policies come directly from the required parameters of
 these catalog entries.
+<!-- normative-capability-catalog:end -->
 
 ## 9. IR shape
 
@@ -534,6 +557,7 @@ StageExecution::Tool { capability, args }
 - Model is the default.
 - Tool execution denotes a deterministic stage.
 - The current DSL emits only `Ref` and `Literal` expressions in tool args.
+- A deterministic-stage prompt, if present, is descriptive metadata only.
 
 ### 9.4 Policies in IR
 
@@ -643,6 +667,158 @@ For worked examples of the current semantics, prefer these public files:
 - Basic linear workflow: [`../examples/hello-workflow/hello.nemo`](../examples/hello-workflow/hello.nemo)
 - Policy-gated file edit: [`../examples/policy-gated-edit/policy-gated-edit.nemo`](../examples/policy-gated-edit/policy-gated-edit.nemo)
 - Hint tutor with optional clarification path: [`../examples/web-hint-tutor/hint-tutor.nemo`](../examples/web-hint-tutor/hint-tutor.nemo)
-- Full fixture with inferred loops and optional-skip: [`../crates/nemoir-dsl-fe/tests/fixtures/coding-agent.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/coding-agent.nemo)
-- Numeric transition guards: [`../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/judge_candidate.nemo)
-- Policy-expression coverage: [`../crates/nemoir-dsl-fe/tests/fixtures/policy_command_allowlist.nemo`](../crates/nemoir-dsl-fe/tests/fixtures/policy_command_allowlist.nemo)
+- Hint-tutor golden source and IR pair: [`../examples/reference-fixtures/hint_tutor.nemo`](../examples/reference-fixtures/hint_tutor.nemo) and [`../examples/reference-fixtures/hint_tutor-ir.yml`](../examples/reference-fixtures/hint_tutor-ir.yml)
+- Full fixture with inferred loops and optional-skip: [`../examples/reference-fixtures/coding-agent.nemo`](../examples/reference-fixtures/coding-agent.nemo)
+- Lowered IR for the full fixture: [`../examples/reference-fixtures/coding-agent-ir.yml`](../examples/reference-fixtures/coding-agent-ir.yml)
+- Numeric transition guards: [`../examples/reference-fixtures/judge_candidate.nemo`](../examples/reference-fixtures/judge_candidate.nemo)
+- Lowered IR for numeric transitions: [`../examples/reference-fixtures/judge_candidate-ir.yml`](../examples/reference-fixtures/judge_candidate-ir.yml)
+- Policy-expression coverage: [`../examples/reference-fixtures/policy_command_allowlist.nemo`](../examples/reference-fixtures/policy_command_allowlist.nemo)
+
+## Appendix A. Complete normative EBNF grammar
+
+<!-- complete-normative-ebnf:start -->
+<!-- grammar-pest-sha256: 2f55f4f9bb4a392fa8ec23f8970f88a13e0f14e6ab7fbc2e2951c17585dae03c -->
+
+The following grammar is a readable EBNF rendering of the released public DSL
+surface. Whitespace and `//` line comments may appear between tokens unless a
+rule says otherwise.
+
+```ebnf
+workflow            = "workflow", ident, "{",
+                      [ input_block ],
+                      [ policy_block ],
+                      { stage },
+                      "}" ;
+
+comment             = "//", { not_newline }, ( newline | end_of_file ) ;
+
+ident               = ascii_alpha, { ascii_alnum | "_" } ;
+dotted_ident        = ident, { ".", ident } ;
+annotation          = "@", ident ;
+
+type_ref            = type_base, [ array_marker ], [ optional_marker ] ;
+type_base           = ident ;
+array_marker        = "[]" ;
+optional_marker     = "?" ;
+
+input_block         = "input", "{", { input_field }, "}" ;
+input_field         = ident, ":", type_ref ;
+
+policy_block        = "policy", "{", { before_policy | deny_policy }, "}" ;
+before_policy       = "before", cap_call, "requires", require_list ;
+deny_policy         = "deny", cap_call, "if", policy_expr ;
+cap_call            = dotted_ident, "(", ident, { ",", ident }, ")" ;
+require_list        = require_item, { ",", require_item } ;
+require_item        = dotted_ident, [ "(", ident, { ",", ident }, ")" ] ;
+
+policy_expr         = or_expr ;
+or_expr             = and_expr, { "or", and_expr } ;
+and_expr            = not_expr, { "and", not_expr } ;
+not_expr            = { not_kw }, compare_expr ;
+not_kw              = "not" not followed by ascii_alnum or "_" ;
+compare_expr        = add_expr, [ compare_op, add_expr ] ;
+compare_op          = ">=" | "<=" | ">" | "<" ;
+add_expr            = mul_expr, { add_op, mul_expr } ;
+add_op              = "+" | "-" ;
+mul_expr            = unary_expr, { mul_op, unary_expr } ;
+mul_op              = "*" | "/" ;
+unary_expr          = { unary_minus }, primary ;
+unary_minus         = "-" ;
+
+primary             = "(", or_expr, ")"
+                    | call_or_in
+                    | node_ref
+                    | number_literal
+                    | policy_ref ;
+
+policy_ref          = ident ;
+node_ref            = ident, ".", ident ;
+number_literal      = digit, { digit }, [ ".", digit, { digit } ] ;
+
+call_or_in          = ident,
+                      ( ".", ident, "(", [ policy_arg_list ], ")"
+                      | "in", policy_array ) ;
+policy_arg_list     = policy_value, { ",", policy_value } ;
+policy_array        = "[", policy_value, { ",", policy_value }, "]" ;
+policy_value        = number_literal | single_line_string | ident ;
+
+stage               = "stage", [ annotation ], ident, "{",
+                      { stage_body_item },
+                      "}" ;
+
+stage_body_item     = transition_block
+                    | prompt_decl
+                    | stage_input
+                    | output_block
+                    | requires_block
+                    | exec_decl ;
+
+transition_block    = transition_decl, [ "," ],
+                      { transition_decl, [ "," ] } ;
+transition_decl     = "transition", ( transition_cond | transition_else ),
+                      "=>", ident ;
+transition_cond     = "if", or_expr ;
+transition_else     = "else" ;
+
+prompt_decl         = "prompt", ":", string ;
+stage_input         = "input", ":", input_ref, { ",", input_ref } ;
+input_ref           = ident, ".", ident, [ optional_marker ] ;
+
+output_block        = "output", ":", "{", { output_field }, "}" ;
+output_field        = ident, ":", type_ref, [ bool_branches ] ;
+bool_branches       = "{", "true", "=>", ident,
+                      "false", "=>", ident, "}" ;
+
+requires_block      = "requires", ":", dotted_ident, { ",", dotted_ident } ;
+
+exec_decl           = "exec", ":", dotted_ident, "(", [ exec_arg_list ], ")" ;
+exec_arg_list       = exec_arg, { ",", exec_arg } ;
+exec_arg            = ident, ":", exec_value ;
+exec_value          = multiline_string
+                    | single_line_string
+                    | json_value
+                    | ident
+                    | ident, ".", ident ;
+
+json_value          = json_object
+                    | json_array
+                    | json_string
+                    | json_number
+                    | json_bool
+                    | json_null ;
+json_object         = "{", [ json_member, { ",", json_member } ], "}" ;
+json_member         = json_string, ":", json_value ;
+json_array          = "[", [ json_value, { ",", json_value } ], "]" ;
+json_string         = '"', { json_char }, '"' ;
+json_char           = '\\"' | json_plain_char ;
+json_number         = [ "-" ], digit, { digit },
+                      [ ".", digit, { digit } ],
+                      [ ( "e" | "E" ), [ "+" | "-" ], digit, { digit } ] ;
+json_bool           = "true" | "false" ;
+json_null           = "null" ;
+
+string              = multiline_string | single_line_string ;
+single_line_string  = '"', { single_line_char }, '"' ;
+multiline_string    = '"""', { multiline_char }, '"""' ;
+```
+
+Lexical notes:
+
+- `ascii_alpha` means `A`-`Z` or `a`-`z`.
+- `ascii_alnum` means `ascii_alpha` or `0`-`9`.
+- `digit` means `0`-`9`.
+- `not_newline` means any character except a line break.
+- `single_line_char` means any non-newline character except `"` and bare `\\`,
+  plus the escape `\"`.
+- `multiline_char` means any character sequence other than the closing `"""`.
+- `json_plain_char` means any character except `"` and bare `\\`.
+- The grammar accepts any annotation spelling of the form `@ident`; semantic
+  validation currently recognizes only `@entry` and `@exit`.
+- `policy_array` contains one or more elements.
+- `cap_call` requires at least one bound parameter name.
+- `compare_expr` supports at most one comparison operator per expression level;
+  chained comparisons such as `a < b < c` are not part of the DSL surface.
+- Expression number literals do not use exponent notation; exponent syntax is
+  available only inside structured JSON exec literals.
+
+<!-- complete-normative-ebnf:end -->
