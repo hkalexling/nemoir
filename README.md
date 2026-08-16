@@ -5,16 +5,21 @@ It compiles the workflow—not the model—into a validated Agent Workflow IR th
 can be inspected and lowered to multiple runtime targets.
 
 > **Research-pilot status.** NemoIR is intended for experimentation,
-> reproducible research, and lab prototypes. Its DSL, IR, and generated APIs
-> may evolve; it is not presented as a production agent platform or a security
-> guarantee.
+> reproducible research, and lab prototypes. Its authoring surfaces, IR, and
+> generated APIs may evolve; it is not presented as a production agent platform
+> or a security guarantee.
 
 ```text
-.nemo workflow → DSL frontend → Agent Workflow IR → validation → backends
-                                                             ├─ HTML visualizer
-                                                             ├─ Python package
-                                                             └─ browser application
+.nemo workflow ────► DSL frontend ───────┐
+                                         ├─► Agent Workflow IR ─► validation ─► backends
+visual document ──► visual frontend ──────┘                                     ├─ HTML visualizer
+                                                                                ├─ Python package
+                                                                                └─ browser application
 ```
+
+The `nemo` CLI accepts `.nemo` source. Visual semantic documents are consumed
+by the browser compiler or the `@nemoir/compiler-wasm` API; see the
+[visual frontend guide](docs/visual-frontend.md).
 
 ## Getting started
 
@@ -33,7 +38,8 @@ The browser-callable compiler facade is published as [`@nemoir/compiler-wasm`](h
 Curated workflow examples live in [`examples/`](examples/):
 
 - [`hello-workflow`](examples/hello-workflow/) — the smallest model-driven
-  workflow and the recommended first compiler invocation.
+  workflow and the recommended first compiler invocation. Ships both
+  `hello.nemo` and the equivalent `hello.visual.json` visual document.
 - [`policy-gated-edit`](examples/policy-gated-edit/) — a Python-targeted
   coding workflow with explicit capability policies.
 - [`web-hint-tutor`](examples/web-hint-tutor/) — a browser-compatible workflow
@@ -43,6 +49,7 @@ Curated workflow examples live in [`examples/`](examples/):
 
 - [Getting started](docs/getting-started.md)
 - [DSL and IR reference](docs/dsl-and-ir.md)
+- [Visual frontend](docs/visual-frontend.md)
 - [Writing workflows](docs/writing-workflows.md)
 - [CLI reference](docs/cli.md)
 - [WASM package](docs/wasm-package.md)
