@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "0.1",
+  "workflow": {
+    "id": "HelloWorkflow",
+    "inputs": [
+      { "id": "input-message", "name": "message", "type": "string" }
+    ]
+  },
+  "states": [
+    {
+      "id": "state-compose",
+      "name": "Compose",
+      "isEntry": true,
+      "isExit": false,
+      "prompt": "Reply with a concise, friendly greeting for the user's message.",
+      "requires": [],
+      "outputs": [
+        { "id": "output-greeting", "name": "greeting", "type": "string", "optional": false }
+      ],
+      "execution": { "kind": "model" }
+    },
+    {
+      "id": "state-done",
+      "name": "Done",
+      "isEntry": false,
+      "isExit": true,
+      "prompt": "Return the greeting unchanged.",
+      "requires": [],
+      "outputs": [
+        { "id": "output-greeting", "name": "greeting", "type": "string", "optional": false }
+      ],
+      "execution": { "kind": "model" }
+    }
+  ],
+  "controlEdges": [
+    {
+      "id": "control-compose-done",
+      "sourceStateId": "state-compose",
+      "targetStateId": "state-done",
+      "order": 20,
+      "guard": { "kind": "always" }
+    }
+  ],
+  "dataEdges": [
+    {
+      "id": "data-message-compose",
+      "source": { "kind": "input", "inputId": "input-message" },
+      "targetStateId": "state-compose",
+      "optional": false
+    },
+    {
+      "id": "data-compose-done",
+      "source": {
+        "kind": "node_output",
+        "stateId": "state-compose",
+        "outputId": "output-greeting"
+      },
+      "targetStateId": "state-done",
+      "optional": false
+    }
+  ],
+  "policies": []
+}

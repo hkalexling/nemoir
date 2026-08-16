@@ -16,6 +16,8 @@ The goal is not to tie workflow semantics to one runtime or one editor. New work
 
 A frontend should own parsing, authoring-surface rules, and lowering from source into the shared IR.
 
+Two frontends ship today: the `.nemo` DSL and the [visual frontend](visual-frontend.md), which lowers visual semantic documents directly into the same IR without a DSL round-trip.
+
 Good frontend extensions:
 
 - keep authoring-surface-specific rules in the frontend layer;

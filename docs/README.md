@@ -1,6 +1,6 @@
 # NemoIR compiler docs
 
-These docs cover the public compiler surface: using the installed `nemo` CLI, writing `.nemo` workflows, running `nemo check` and `nemo compile`, understanding current backend compatibility, and discovering the browser-related public packages.
+These docs cover the public compiler surface: using the installed `nemo` CLI, writing `.nemo` workflows or visual semantic documents, running `nemo check` and `nemo compile`, understanding current backend compatibility, and discovering the browser-related public packages.
 
 NemoIR is a research compiler for structured agent workflows. This documentation describes the current public compiler behavior. It does not present NemoIR as a production product or a security guarantee.
 
@@ -10,6 +10,7 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 - [Writing workflows](writing-workflows.md)
 - [CLI reference](cli.md)
 - [DSL and IR reference](dsl-and-ir.md)
+- [Visual frontend](visual-frontend.md)
 - [Python target guide](targets/python.md)
 - [Web target guide](targets/web.md)
 - [Browser compiler](browser-compiler.md)
@@ -29,5 +30,5 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 
 - [`../README.md`](../README.md) stays short and points here for user-facing compiler documentation.
 - Public docs here assume the `nemo` binary is already available; they do not include source-build or release runbooks.
-- `docs/` contains the published compiler documentation: workflow authoring, CLI behavior, validation stages, the normative DSL/IR reference, and backend target guides.
+- `docs/` contains the published compiler documentation: workflow authoring (both the `.nemo` DSL and the visual document frontend), CLI behavior, validation stages, the normative DSL/IR reference, and backend target guides.
 - Runtime package APIs should be documented in their own public repositories or npm pages. This folder links to those pages rather than duplicating package-level API references.

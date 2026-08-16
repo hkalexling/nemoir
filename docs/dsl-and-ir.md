@@ -6,6 +6,13 @@ lowering semantics, and the resulting Agent Workflow IR contract.
 Implementation files, private fixtures, and internal source layout are not part
 of the public reference.
 
+The Agent Workflow IR described here is shared with the
+[visual frontend](visual-frontend.md), which lowers visual semantic documents
+into the same IR without going through the `.nemo` DSL. The DSL-specific
+syntax and lowering rules in Sections 2-7 apply to `.nemo` source only.
+Sections 8-11 define shared capability, IR, validation, and execution behavior
+except where they explicitly describe current DSL behavior.
+
 Useful public examples and reference fixtures:
 
 - [`../examples/hello-workflow/hello.nemo`](../examples/hello-workflow/hello.nemo)
@@ -29,7 +36,9 @@ frontend -> validated Agent Workflow IR -> backend/runtime
 
 For the text frontend, the authoring surface is the `.nemo` DSL. The compiler
 resolves names, validates the workflow, infers transitions where needed, and
-lowers the result into a target-neutral IR.
+lowers the result into a target-neutral IR. The visual frontend is a second
+authoring surface that produces the same IR directly from a visual semantic
+document; see [Visual frontend](visual-frontend.md).
 
 ## 2. DSL surface
 

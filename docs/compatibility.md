@@ -6,7 +6,15 @@ This page records the current compiler-side compatibility contract.
 
 The current Agent Workflow IR version is `0.1`.
 
-`nemo compile` lowers `.nemo` workflows to this IR and then validates that the result matches the expected IR structure and semantics.
+`nemo compile` lowers `.nemo` workflows to this IR and then validates that the result matches the expected IR structure and semantics. The [visual frontend](visual-frontend.md) lowers visual semantic documents into the same IR version and applies the same validation and target rules.
+
+## Visual document schema
+
+The released visual semantic-document schema is `0.1`. It is versioned
+independently from the IR: programmatic consumers should obtain the accepted
+schema version and capability catalogue from `visualMetadata()` rather than
+assuming that an IR-version change implies a visual-schema change, or vice
+versa.
 
 ## Target outputs
 
@@ -39,7 +47,7 @@ It rejects workflows that require unsupported capabilities such as `fs.read`, `f
 
 The public examples reflect current target intent:
 
-- [`../examples/hello-workflow/`](../examples/hello-workflow/) is suitable for `visualizer`, `python`, and `web`.
+- [`../examples/hello-workflow/`](../examples/hello-workflow/) is suitable for `visualizer`, `python`, and `web`. It ships both `hello.nemo` and the equivalent `hello.visual.json` visual document.
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) is Python-oriented and not web-compatible because it uses `path`, `fs.read`, and `fs.write`.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is web-compatible and also serves as a good frontend validation example.
 
