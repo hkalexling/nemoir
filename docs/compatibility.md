@@ -23,7 +23,7 @@ versa.
 | `none` | No artifact | Useful for lowering and optional IR dumping only. |
 | `visualizer` | Standalone HTML file | No separate NemoIR runtime package is required for the generated HTML artifact. |
 | `python` | Python package | Generated `pyproject.toml` currently requires Python `>=3.11` and [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) `>=0.9.2`. |
-| `web` | Vite/TypeScript app | Generated `package.json` currently uses [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) `^0.4.0` and [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui) `^0.2.0` by default. |
+| `web` | Vite/TypeScript app | Generated `package.json` currently uses [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) `^0.5.0` and [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui) `^0.3.0` by default. |
 
 ## Web target compatibility
 

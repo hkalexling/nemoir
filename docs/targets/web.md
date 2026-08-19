@@ -55,8 +55,8 @@ At a high level:
 
 Generated `package.json` files depend on:
 
-- `@nemoir/web-runtime`: `^0.4.0`
-- `@nemoir/web-ui`: `^0.2.0`
+- `@nemoir/web-runtime`: `^0.5.0`
+- `@nemoir/web-ui`: `^0.3.0`
 
 During integrated development you can override either dependency string at compile time:
 
@@ -75,6 +75,15 @@ The web backend derives names from the workflow id:
 - workflow inputs and exit-stage output fields -> TypeScript property names in `src/agent.ts`
 
 Compilation fails if the workflow id cannot be converted to a valid package directory name, or if generated TypeScript field names would be invalid.
+
+## Generated app controls
+
+Workflows with model stages ship two extra controls in the generated app:
+
+- **Temperature** — a single sampling temperature (slider, 0–2, default `0.2`) in the *Generation settings* card. It is applied to every model stage via the run's `generationParams`; the default matches the runtime's low default, which keeps small local models reliably following the tagged-envelope output contract.
+- **Delete all model caches** — in the *Model* card, deletes every cached model artifact known to the app (weights, config, tokenizer, wasm) from the browser cache after a confirmation dialog. The sweep is best-effort per model, unloads the current model, and reports a summary (deleted count plus any per-model failures). The next run re-downloads the selected model.
+
+Both controls are hidden for deterministic-only workflows (no model stages).
 
 ## Web compatibility checks
 
