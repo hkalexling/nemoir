@@ -53,7 +53,7 @@ Compilation also fails if any workflow input id or exit-stage output field that 
 Generated packages currently declare:
 
 - Python `>=3.11`
-- `nemoir-runtime>=0.9.2`
+- `nemoir-runtime>=0.9.4`
 
 ## Runtime docs
 
