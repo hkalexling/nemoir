@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Secrets
+.env
+.env.local
+
+# Generated compiler artifacts (regenerate with `nemo compile`)
+# Keep notebooks (*.ipynb) — they contain pre-rendered outputs for viewers
+*.html
+/covertype_xgb_autoresearch/
+autoresearch/
+/covertype_xgb_autoresearch.egg-info/
+slm_autoresearch.egg-info/
+
+# Runtime / evidence (created by running demos)
+runs/
+data/
+adapter/
+adapter_best/
+adapter_latest/
+checkpoints/
+results.json
+trial_log.jsonl
+last_trial.json
+best_score.txt
+decision.json
+work/
+
+# OS
+.DS_Store

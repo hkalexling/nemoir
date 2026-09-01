@@ -1,0 +1,308 @@
+// ── NemoIR Autoresearch Workflow: GLUE/MNLI LoRA Demo ───────────────────────
+//
+// Compiles a Karpathy-style autoresearch loop for small-language-model LoRA
+// post-training into a policy-constrained, statically checkable workflow.
+//
+// Mutable artifact: candidate.py only.
+// Frozen evaluator: harness/train.py, harness/eval.py, harness/state.py,
+// harness/preflight.py, harness/benchmarks.yml.
+//
+// Public benchmark profile: GLUE MNLI natural-language inference.
+
+workflow Autoresearch {
+  input {
+    cwd: path
+    eps: number
+  }
+
+  policy {
+    // Only candidate.py is mutable — harness/* is frozen and candidate.py lives
+    // inside cwd, so no extra denylist is needed.
+    deny fs.write(path) if not path.eq("candidate.py")
+
+    // Deterministic shell allowlist. Runtime knobs are provided through env vars
+    // set by run.py; the compiled workflow keeps command shapes fixed.
+    deny os.shell(command) if not (
+      command.eq("python harness/preflight.py")
+      or command.eq("python harness/train.py")
+      or command.eq("python harness/eval.py --adapter none")
+      or command.eq("python harness/eval.py --adapter adapter")
+      or command.eq("python harness/state.py init")
+      or command.eq("python harness/state.py start-trial")
+      or command.eq("python harness/state.py judge")
+      or command.eq("python harness/state.py accept")
+      or command.eq("python harness/state.py reject")
+      or command.eq("python harness/state.py should-continue")
+    )
+
+    // Reject shell metacharacter injection.
+    deny os.shell(command) if command.contains("&&")
+                             or command.contains(";")
+                             or command.contains("|")
+                             or command.contains("`")
+                             or command.contains("$(")
+  }
+
+  // ═══ Setup and baseline measurements ═══
+
+  stage@entry Setup {
+    prompt: """
+      You are the Autoresearch Controller for a GLUE/MNLI LoRA demo.
+      Read candidate.py plus harness/benchmarks.yml to understand the fixed
+      public benchmark, the MNLI A/B/C label mapping, and the editable search
+      space. Summarize the baseline recipe and the parameters available for
+      tuning. Do not edit files in this stage.
+    """
+    requires: fs.read
+    output: {
+      baseline_config: string
+    }
+  }
+
+  stage StateInit {
+    prompt: "Initialize deterministic run state."
+    exec: os.shell(command: "python harness/state.py init")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      report: string
+    }
+  }
+
+  stage BaseModelEval {
+    prompt: "Evaluate the untuned base model on the MNLI proxy slice."
+    exec: os.shell(command: "python harness/eval.py --adapter none")
+    output: {
+      ok: bool
+      score: number
+      metrics: string
+    }
+  }
+
+  stage InitialRecipeTrain {
+    prompt: "Train the initial candidate.py LoRA recipe."
+    exec: os.shell(command: "python harness/train.py")
+    output: {
+      ok: bool { true => InitialRecipeEval false => FinalReport }
+      log: string
+    }
+  }
+
+  stage InitialRecipeEval {
+    prompt: "Evaluate the initial LoRA recipe; this becomes the incumbent."
+    exec: os.shell(command: "python harness/eval.py --adapter adapter")
+    output: {
+      ok: bool { true => AcceptInitial false => FinalReport }
+      score: number
+      metrics: string
+    }
+  }
+
+  stage AcceptInitial {
+    prompt: "Accept the initial LoRA recipe as the first incumbent."
+    exec: os.shell(command: "python harness/state.py accept")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      score: number
+      report: string
+    }
+  }
+
+  // ═══ Trial loop: restore incumbent → analyze → patch → train → eval → judge ═══
+
+  stage StateStartTrial {
+    prompt: "Start the next trial and restore candidate.py to the incumbent."
+    exec: os.shell(command: "python harness/state.py start-trial")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      report: string
+    }
+  }
+
+  stage AnalyzeHistory {
+    prompt: """
+      Analyze the MNLI autoresearch history so far.
+      Read candidate.py and runs/current/trial_history.jsonl if available.
+      Identify which LoRA/training/prompt changes improved or hurt MNLI
+      validation accuracy. Suggest a targeted next direction.
+
+      Important constraints:
+      - Before each trial, the workflow automatically restores candidate.py
+        to the last accepted version. Each patch is therefore evaluated relative
+        to the current best, not relative to the previous rejected candidate.
+      - GLUE MNLI is a 3-way NLI benchmark: entailment, neutral, contradiction.
+      - Training and eval share candidate.format_prompt and answer-only loss.
+      - Change only one or two coherent factors per trial.
+      - Avoid repeating rejected rank/dropout/step combinations from history.
+    """
+    input: StateStartTrial.trial_count, StateStartTrial.best_score,
+           BaseModelEval.score, InitialRecipeEval.score?,
+           AcceptCandidate.report?, RejectCandidate.report?
+    requires: fs.read
+    output: {
+      analysis: string
+      direction: string
+    }
+  }
+
+  stage ProposeRecipePatch {
+    prompt: """
+      Propose a concrete patch to candidate.py based on the analysis.
+      State exact old/new values and why they should improve MNLI accuracy.
+      Keep the patch small and attributable.
+
+      Editable search space includes:
+        - LORA_R, LORA_ALPHA, LORA_DROPOUT, LORA_TARGET_MODULES
+        - LEARNING_RATE, LR_SCHEDULER, WARMUP_STEPS, MAX_STEPS
+        - PER_DEVICE_BATCH_SIZE, GRAD_ACCUM_STEPS, MAX_SEQ_LENGTH
+        - TRAIN_EXAMPLES
+        - SYSTEM_INSTRUCTION, format_prompt, label wording/order
+    """
+    input: AnalyzeHistory.analysis, AnalyzeHistory.direction,
+           Setup.baseline_config, StateStartTrial.best_score
+    requires: fs.read
+    output: {
+      patch_description: string
+    }
+  }
+
+  stage ApplyPatch {
+    prompt: """
+      Apply the proposed patch to candidate.py using edit_file.
+      Then read candidate.py back and verify the exact intended changes.
+      Do not edit any harness file.
+    """
+    input: ProposeRecipePatch.patch_description
+    requires: fs.read, fs.write
+    output: {
+      applied: bool
+      summary: string
+    }
+  }
+
+  stage Preflight {
+    prompt: "Run candidate.py and MNLI-formatting smoke checks."
+    exec: os.shell(command: "python harness/preflight.py")
+    output: {
+      ok: bool { true => TrainAdapter false => RepairPatch }
+      log: string
+    }
+  }
+
+  stage RepairPatch {
+    prompt: """
+      Preflight failed. Diagnose the syntax/configuration/formatting error
+      from the preflight log, fix candidate.py only, and try again.
+    """
+    input: Preflight.log
+    requires: fs.read, fs.write
+    output: {
+      summary: string
+    }
+    transition else => Preflight
+  }
+
+  stage TrainAdapter {
+    prompt: "Train the LoRA adapter using the current MNLI candidate.py recipe."
+    exec: os.shell(command: "python harness/train.py")
+    output: {
+      ok: bool { true => BenchmarkAdapter false => RejectCandidate }
+      log: string
+    }
+  }
+
+  stage BenchmarkAdapter {
+    prompt: "Evaluate the current adapter on the fixed MNLI proxy slice."
+    exec: os.shell(command: "python harness/eval.py --adapter adapter")
+    output: {
+      ok: bool
+      score: number
+      metrics: string
+    }
+  }
+
+  stage JudgeCandidate {
+    prompt: "Deterministically compare the latest MNLI score against incumbent best."
+    exec: os.shell(command: "python harness/state.py judge")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      score: number
+      report: string
+    }
+    transition if score - best_score > eps => AcceptCandidate
+    transition else                         => RejectCandidate
+  }
+
+  stage AcceptCandidate {
+    prompt: "Accept improved candidate and archive candidate.py + adapter."
+    exec: os.shell(command: "python harness/state.py accept")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      score: number
+      report: string
+    }
+    transition else => ReflectAndLog
+  }
+
+  stage RejectCandidate {
+    prompt: "Reject non-improving candidate and restore the incumbent candidate.py."
+    exec: os.shell(command: "python harness/state.py reject")
+    output: {
+      state_json: string
+      trial_count: number
+      best_score: number
+      score: number
+      report: string
+    }
+    transition else => ReflectAndLog
+  }
+
+  stage ReflectAndLog {
+    prompt: "Check deterministic trial budget and decide whether to continue."
+    exec: os.shell(command: "python harness/state.py should-continue")
+    output: {
+      continue_search: bool { true => StateStartTrial false => FinalReport }
+      state_json: string
+      trial_count: number
+      best_score: number
+      report: string
+    }
+  }
+
+  // ═══ Exit ═══
+
+  stage@exit FinalReport {
+    prompt: """
+      Produce the final report for the MNLI autoresearch run.
+      Summarize:
+        - base model score,
+        - initial LoRA incumbent score,
+        - best accepted score,
+        - accepted/rejected trial trajectory,
+        - what changes helped or hurt,
+        - where artifacts are stored under runs/current/.
+      Read runs/current/trial_history.jsonl if available.
+    """
+    input: Setup.baseline_config,
+           BaseModelEval.score,
+           InitialRecipeEval.score?,
+           AcceptInitial.best_score?,
+           StateStartTrial.trial_count?,
+           AcceptCandidate.report?,
+           RejectCandidate.report?,
+           ReflectAndLog.report?
+    requires: fs.read
+    output: {
+      summary: string
+    }
+  }
+}

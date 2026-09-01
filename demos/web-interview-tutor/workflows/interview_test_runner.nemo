@@ -1,0 +1,347 @@
+// Deterministic, confirmation-gated test-evaluator workflow.
+//
+// Learner code is NEVER evaluated by the host app. The compile-time literal
+// below is a reviewed evaluator harness that validates, compiles, executes,
+// and deep-compares learner JavaScript inside the opaque sandbox. No model,
+// no browser.js.run, no host-page access.
+workflow InterviewTestRunner {
+  input {
+    attempt_bundle: json
+  }
+
+  policy {
+    before browser.js.sandbox(code) requires user.confirm
+  }
+
+  // A sole stage is implicitly both the entry and exit stage. The harness
+  // source is a workflow-author-owned compile-time literal.
+  stage ExecuteAttempt {
+    exec: browser.js.sandbox(
+      code: """
+// Deterministic evaluator harness — learner-code test runner.
+//
+// Runs inside the opaque-origin sandbox (strict mode). Receives `input`
+// as the attempt bundle and returns `{ report: {…} }`.  The outer sandbox
+// handles timeout / uninterruptible-loop termination — this harness never
+// self-reports a timeout status.
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function _safeId(n) {
+  // Require a non-empty JS identifier that is not a blocked escape hatch.
+  if (typeof n !== "string" || n.length === 0 || n.length > 256) return false;
+  if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(n)) return false;
+  var blocked = [
+    "constructor","__proto__","prototype","eval","Function",
+    "import","importScripts","window","self","globalThis",
+    "top","parent","frames","fetch","XMLHttpRequest","WebSocket",
+    "document","location","arguments","caller","callee"
+  ];
+  for (var i = 0; i < blocked.length; i++) {
+    if (n === blocked[i]) return false;
+  }
+  return true;
+}
+
+function _isSafe(v, _seen) {
+  // Reject undefined, function, symbol, bigint, NaN, Infinity,
+  // and any object/array tree containing them.  JSON can represent
+  // null, boolean, finite number, string, object, and array.
+  // Only plain objects (Object.prototype or null prototype) are
+  // accepted; Date, Map, Set, class instances, etc. are rejected.
+  // Cycles are detected via an internal WeakSet and rejected.
+  if (v === null) return true;
+  var t = typeof v;
+  if (t === "number") return isFinite(v);
+  if (t === "string" || t === "boolean") return true;
+  if (Array.isArray(v)) {
+    if (!_seen) { try { _seen = new WeakSet(); } catch (_) { return false; } }
+    if (_seen.has(v)) return false;
+    try { _seen.add(v); } catch (_) { return false; }
+    for (var i = 0; i < v.length; i++) { if (!_isSafe(v[i], _seen)) return false; }
+    return true;
+  }
+  if (t === "object") {
+    // Defensively reject non-plain objects (Date, Map, class instances).
+    try {
+      var proto = Object.getPrototypeOf(v);
+      if (proto !== null && proto !== Object.prototype) return false;
+    } catch (_) { return false; }
+    if (!_seen) { try { _seen = new WeakSet(); } catch (_) { return false; } }
+    if (_seen.has(v)) return false;
+    try { _seen.add(v); } catch (_) { return false; }
+    var keys;
+    try { keys = Object.keys(v); } catch (_) { return false; }
+    for (var i = 0; i < keys.length; i++) {
+      var val;
+      try { val = v[keys[i]]; } catch (_) { return false; }
+      if (!_isSafe(val, _seen)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function _deepEq(a, b) {
+  // Deep structural equality for JSON-compatible values.
+  // Object-key-order independent.  Handles null, primitives, arrays, objects.
+  // NaN and Infinity are already rejected by _isSafe for both expected and
+  // actual values, so we do not special-case them here.
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) { if (!_deepEq(a[i], b[i])) return false; }
+    return true;
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (typeof a === "object") {
+    var ka = Object.keys(a).sort();
+    var kb = Object.keys(b).sort();
+    if (ka.length !== kb.length) return false;
+    for (var i = 0; i < ka.length; i++) {
+      if (ka[i] !== kb[i]) return false;
+      if (!_deepEq(a[ka[i]], b[kb[i]])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function _mkReport(status, total, passed, elapsed, firstFailure) {
+  var r = {
+    status: status,
+    total: total,
+    passed: passed,
+    elapsedMs: elapsed,
+    evaluatorVersion: _ev
+  };
+  if (firstFailure) r.firstFailure = firstFailure;
+  return r;
+}
+
+function _trim(s, max) {
+  s = String(s);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function _deepClone(v) {
+  // Deep-clone a JSON-safe value so learner code cannot mutate test data.
+  // Input is already validated by _isSafe (cycle-free, plain objects/arrays
+  // only, finite primitives), so JSON round-trip is safe and idempotent.
+  return JSON.parse(JSON.stringify(v));
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+var _ev = (input && typeof input.evaluatorVersion === "string")
+  ? input.evaluatorVersion
+  : "unknown";
+
+var _t0 = performance.now();
+
+// --- Validate outer attempt bundle shape ---
+
+if (!input || typeof input !== "object") {
+  return {
+    report: _mkReport("runtime_error", 0, 0, 0, {
+      testId: "attempt", args: [], expected: null,
+      error: "Invalid attempt bundle: must be an object"
+    })
+  };
+}
+
+var source = input.source;
+var entryFunctionName = input.entryFunctionName;
+var tests = input.tests;
+
+if (typeof source !== "string" || source.length === 0) {
+  return {
+    report: _mkReport("runtime_error", 0, 0, 0, {
+      testId: "attempt", args: [], expected: null,
+      error: "Invalid attempt bundle: source must be a non-empty string"
+    })
+  };
+}
+
+if (!_safeId(entryFunctionName)) {
+  return {
+    report: _mkReport("runtime_error", 0, 0, 0, {
+      testId: "attempt", args: [], expected: null,
+      error: "Invalid entry function name: " + _trim(entryFunctionName, 100)
+    })
+  };
+}
+
+if (!Array.isArray(tests) || tests.length === 0) {
+  return {
+    report: _mkReport("runtime_error", 0, 0, 0, {
+      testId: "attempt", args: [], expected: null,
+      error: "Invalid attempt bundle: tests must be a non-empty array"
+    })
+  };
+}
+
+// --- Validate every test case ---
+
+for (var _ti = 0; _ti < tests.length; _ti++) {
+  var _t = tests[_ti];
+  if (!_t || typeof _t !== "object") {
+    return {
+      report: _mkReport("runtime_error", tests.length, 0, 0, {
+        testId: String(_ti), args: [], expected: null,
+        error: "Invalid test case at index " + _ti + ": must be an object"
+      })
+    };
+  }
+  if (!("id" in _t) || (typeof _t.id !== "string" && typeof _t.id !== "number")) {
+    return {
+      report: _mkReport("runtime_error", tests.length, 0, 0, {
+        testId: String(_ti), args: [], expected: null,
+        error: "Invalid test case at index " + _ti + ": missing or invalid id"
+      })
+    };
+  }
+  if (!Array.isArray(_t.args)) {
+    return {
+      report: _mkReport("runtime_error", tests.length, 0, 0, {
+        testId: String(_t.id), args: [], expected: null,
+        error: "Test '" + _trim(_t.id, 80) + "': args must be an array"
+      })
+    };
+  }
+  if (!_isSafe(_t.args)) {
+    return {
+      report: _mkReport("runtime_error", tests.length, 0, 0, {
+        testId: String(_t.id), args: [], expected: null,
+        error: "Test '" + _trim(_t.id, 80) + "': args must be JSON-safe"
+      })
+    };
+  }
+  if (!("expected" in _t) || !_isSafe(_t.expected)) {
+    return {
+      report: _mkReport("runtime_error", tests.length, 0, 0, {
+        testId: String(_t.id), args: _t.args.slice(), expected: null,
+        error: "Test '" + _trim(_t.id, 80) + "': expected must be JSON-safe"
+      })
+    };
+  }
+}
+
+// --- Compile learner source via dynamic evaluation (only inside sandbox) ---
+
+var _fnFactory;
+try {
+  // new Function compiles the learner source into a factory body whose
+  // last statement is `return <entryFunctionName>`.  If the source has
+  // syntax errors, the constructor throws — that is a syntax_error.
+  _fnFactory = new Function(
+    '"use strict";\n' + source + '\n; return ' + entryFunctionName + ';'
+  );
+} catch (_se) {
+  return {
+    report: _mkReport("syntax_error", tests.length, 0,
+      Math.round(performance.now() - _t0), {
+        testId: "source", args: [], expected: null,
+        error: "Syntax error: " + _trim(_se.message || _se, 500)
+      })
+  };
+}
+
+// --- Execute top-level learner source; resolve entry ---
+// Errors during factory execution (e.g. referencing undeclared globals)
+// are runtime_errors, not syntax_errors.
+
+var _fn;
+try {
+  _fn = _fnFactory();
+} catch (_re) {
+  return {
+    report: _mkReport("runtime_error", tests.length, 0,
+      Math.round(performance.now() - _t0), {
+        testId: "source", args: [], expected: null,
+        error: "Runtime error executing source: " + _trim(_re.message || _re, 500)
+      })
+  };
+}
+
+if (typeof _fn !== "function") {
+  return {
+    report: _mkReport("runtime_error", tests.length, 0,
+      Math.round(performance.now() - _t0), {
+        testId: "source", args: [], expected: null,
+        error: "Entry '" + _trim(entryFunctionName, 100) +
+          "' resolved to " + typeof _fn + ", not a function"
+      })
+  };
+}
+
+// --- Run tests sequentially; stop at first failure ---
+
+var _passed = 0;
+for (var _ti2 = 0; _ti2 < tests.length; _ti2++) {
+  var _tc = tests[_ti2];
+  var _id = String(_tc.id);
+  var _args = _deepClone(_tc.args);  // deep-clone so learner cannot mutate test data
+  var _expected = _tc.expected;
+
+  try {
+    var _result = _fn.apply(null, _args);
+    // Await if the entry returned a promise (async learner functions).
+    if (_result && typeof _result.then === "function") {
+      _result = await _result;
+    }
+
+    // Reject non-JSON-safe learner output before comparison.
+    if (!_isSafe(_result)) {
+      return {
+        report: _mkReport("runtime_error", tests.length, _passed,
+          Math.round(performance.now() - _t0), {
+            testId: _id, args: _args, expected: _expected,
+            error: "Function returned a non-JSON-safe value"
+          })
+      };
+    }
+
+    if (!_deepEq(_result, _expected)) {
+      return {
+        report: _mkReport("failed", tests.length, _passed,
+          Math.round(performance.now() - _t0), {
+            testId: _id, args: _args, expected: _expected,
+            actual: _result,
+            error: "Assertion mismatch: expected value does not match actual"
+          })
+      };
+    }
+
+    _passed++;
+  } catch (_re) {
+    return {
+      report: _mkReport("runtime_error", tests.length, _passed,
+        Math.round(performance.now() - _t0), {
+          testId: _id, args: _args, expected: _expected,
+          error: "Runtime error: " + _trim(_re.message || _re, 500)
+        })
+    };
+  }
+}
+
+// --- All tests passed ---
+
+return {
+  report: _mkReport("passed", tests.length, _passed,
+    Math.round(performance.now() - _t0))
+};
+""",
+      input: attempt_bundle
+    )
+    output: {
+      report: json
+    }
+  }
+}

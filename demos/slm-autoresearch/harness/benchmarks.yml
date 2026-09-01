@@ -1,0 +1,34 @@
+# Public benchmark profile for the NemoIR SLM autoresearch demo.
+#
+# GLUE/MNLI is a standard, well-studied natural-language inference benchmark.
+# The harness trains on a fixed train subset and optimizes proxy accuracy on a
+# deterministic validation_matched slice. A final report can evaluate larger
+# validation_matched and validation_mismatched slices.
+
+profile: mnli_demo
+
+tasks:
+  mnli_matched:
+    dataset: "nyu-mll/glue"
+    config: "mnli"
+    split: "validation_matched"
+    weight: 1.0
+    type: natural_language_inference
+    num_examples: 2000
+    metric: accuracy
+
+training:
+  dataset: "nyu-mll/glue"
+  config: "mnli"
+  split: "train"
+  train_examples: 4000
+
+confirm_eval:
+  split: "validation_mismatched"
+  num_examples: 500
+
+final_eval:
+  - split: "validation_matched"
+    num_examples: 2000
+  - split: "validation_mismatched"
+    num_examples: 2000

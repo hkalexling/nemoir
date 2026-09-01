@@ -43,13 +43,18 @@ It rejects workflows that require unsupported capabilities such as `fs.read`, `f
 
 `browser.js.run` and `browser.js.sandbox` are deterministic-stage-only capabilities on the web target. In addition, `browser.js.sandbox` requires an explicit approval policy of the form `before browser.js.sandbox(code) requires user.confirm`.
 
-## Example-level guidance
+## Example- and demo-level guidance
 
 The public examples reflect current target intent:
 
 - [`../examples/hello-workflow/`](../examples/hello-workflow/) is suitable for `visualizer`, `python`, and `web`. It ships both `hello.nemo` and the equivalent `hello.visual.json` visual document.
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) is Python-oriented and not web-compatible because it uses `path`, `fs.read`, and `fs.write`.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is web-compatible and also serves as a good frontend validation example.
+
+The public demos extend that coverage:
+
+- [`../demos/web-interview-tutor/`](../demos/web-interview-tutor/) — `web` target (`browser.js.sandbox` with mandatory `before browser.js.sandbox(code) requires user.confirm`, `browser.js.run`, `browser.storage`).
+- [`../demos/xgboost-autoresearch/`](../demos/xgboost-autoresearch/) and [`../demos/slm-autoresearch/`](../demos/slm-autoresearch/) — `python` target (`fs.read/write`, `os.shell` literal allowlist, compiled `score - best > eps`).
 
 ## Documentation boundary
 

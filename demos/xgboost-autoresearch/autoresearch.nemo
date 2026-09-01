@@ -1,0 +1,386 @@
+// NemoIR Covertype XGBoost autoresearch proof of concept.
+//
+// The LLM may inspect aggregate history and edit candidate.json only.  The
+// frozen harness owns data/splits/features/training/metrics/state/final test.
+
+workflow CovertypeXgbAutoresearch {
+  input {
+    cwd: path
+    candidate_path: path
+    agent_view_dir: path
+    eps: number
+  }
+
+  policy {
+    // Read-before-write for the mutable config.
+    before fs.write(path) requires fs.read(path)
+
+    // Reads: only the mutable config and the sanitized agent view.
+    deny fs.read(path) if not (
+      path.eq(candidate_path) or agent_view_dir.contains(path)
+    )
+
+    // Writes: only candidate.json, and only inside the workspace.
+    deny fs.write(path) if not (
+      path.eq(candidate_path) and cwd.contains(path)
+    )
+
+    // Every expensive or stateful action is a literal deterministic command.
+    deny os.shell(command) if not (
+      command.eq("python harness/state.py init")
+      or command.eq("python harness/baseline.py")
+      or command.eq("python harness/state.py adopt-baseline")
+      or command.eq("python harness/state.py start-trial")
+      or command.eq("python harness/preflight.py")
+      or command.eq("python harness/state.py repair-gate")
+      or command.eq("python harness/train.py")
+      or command.eq("python harness/evaluate.py --split selection --model current")
+      or command.eq("python harness/state.py judge-primary")
+      or command.eq("python harness/evaluate.py --split confirmation --model current")
+      or command.eq("python harness/state.py judge-confirm")
+      or command.eq("python harness/state.py accept")
+      or command.eq("python harness/state.py reject")
+      or command.eq("python harness/state.py should-continue")
+      or command.eq("python harness/final_eval.py")
+    )
+    deny os.shell(command) if command.contains("&&")
+                             or command.contains(";")
+                             or command.contains("|")
+                             or command.contains("`")
+                             or command.contains("$(")
+  }
+
+  stage@entry Init {
+    exec: os.shell(command: "python harness/state.py init")
+    output: {
+      ok: bool
+      state_json: string
+      trial_count: number
+      report: string
+    }
+    transition if ok => Baseline
+    transition else => FinalEval
+  }
+
+  stage Baseline {
+    exec: os.shell(command: "python harness/baseline.py")
+    output: {
+      ok: bool
+      score: number
+      selection_score: number
+      confirmation_score: number
+      metrics: string
+      report: string
+    }
+    transition if ok => AdoptBaseline
+    transition else => FinalEval
+  }
+
+  stage AdoptBaseline {
+    exec: os.shell(command: "python harness/state.py adopt-baseline")
+    output: {
+      ok: bool
+      state_json: string
+      trial_count: number
+      score: number
+      best_score: number
+      selection_score: number
+      confirmation_score: number
+      report: string
+    }
+    transition if ok => StartTrial
+    transition else => FinalEval
+  }
+
+  // Each trial starts from the last accepted configuration, never a rejected patch.
+  stage StartTrial {
+    exec: os.shell(command: "python harness/state.py start-trial")
+    output: {
+      ok: bool
+      state_json: string
+      trial_count: number
+      best_score: number
+      history_summary: string
+      mutable_candidate_path: path
+      history_path: path
+      report: string
+    }
+    transition if ok => AnalyzeHistory
+    transition else => FinalEval
+  }
+
+  stage AnalyzeHistory {
+    prompt: """
+      Analyze the bounded Covertype XGBoost search history. You are given the
+      current candidate config path and a precomputed history_summary. Read the
+      candidate file to see exact current parameter values, then propose one
+      small, evidence-based direction for the next change. When the previous
+      trial was rejected, RejectCandidate.report and history_summary contain the
+      authoritative reason code, candidate/incumbent values, delta, and epsilon
+      (or an explicit unavailable value when evaluation did not complete). Use
+      those facts and do not infer a different rejection cause.
+
+      The fixed harness uses multiclass XGBoost on UCI Covertype (581K rows,
+      54 features, 7 classes). Macro-F1 is the primary selection metric;
+      accuracy, multiclass log loss, and per-class metrics are safeguards.
+      The train/early-stop/selection/confirmation/test partitions, objective,
+      seed, device, nthread, and metrics are immutable.
+
+      Editable candidate.json schema (frozen, schema_version: 1):
+        feature_recipe: raw_v1 | terrain_v1
+        n_estimators: int [10..2000]
+        max_depth: int [2..20]
+        learning_rate: float [0.001..0.5]
+        subsample: float [0.1..1.0]
+        colsample_bytree: float [0.1..1.0]
+        colsample_bylevel: float [0.1..1.0]
+        colsample_bynode: float [0.1..1.0]
+        reg_alpha: float [0..20]   reg_lambda: float [0..20]
+        gamma: float [0..10]   min_child_weight: float [0..50]
+        max_bin: int [32..512]
+        grow_policy: depthwise | lossguide
+        early_stopping_rounds: int [5..500]
+        class_weight_mode: none | balanced | balanced_sqrt
+        max_delta_step: float [0..10]
+
+      Frozen (candidate cannot touch): objective=multi:softprob, num_class=7,
+      tree_method=hist, eval_metric=mlogloss, seed, device, nthread, splits, metrics.
+
+      Feature recipes: raw_v1=54 raw features; terrain_v1=69 (raw + 15 derived
+      terrain features); minimal_v1=10 (continuous features only, drops the 44
+      binary wilderness/soil one-hot columns — tests whether categorical
+      soil/wilderness info is essential).
+
+      Guidelines: change only one or two coherent parameters per trial. The
+      compiled workflow enforces that no configuration is evaluated twice —
+      a semantically identical candidate (same params, ignoring candidate_id)
+      will be rejected by preflight regardless of what the history says. Do not
+      retry rejected configurations. Insightful directions include: tree
+      complexity (max_depth, min_child_weight, gamma), learning rate vs
+      n_estimators tradeoff, subsampling regularization (subsample,
+      colsample_bytree), L1/L2 regularization (reg_alpha, reg_lambda), class
+      balance (class_weight_mode for rare classes), and feature recipe choice
+      (raw_v1 adds categorical soil/wilderness features, terrain_v1 adds
+      derived terrain interactions, minimal_v1 uses continuous features only).
+    """
+    input: StartTrial.mutable_candidate_path,
+           StartTrial.history_summary,
+           StartTrial.trial_count,
+           StartTrial.best_score,
+           AdoptBaseline.report?,
+           AcceptCandidate.report?,
+           RejectCandidate.report?
+    requires: fs.read
+    output: {
+      analysis: string
+      direction: string
+    }
+  }
+
+  stage ProposeCandidate {
+    prompt: """
+      Propose one small, attributable JSON change to candidate.json based on the
+      analysis. State exact old and new values and why the change addresses the
+      observed validation behavior. Stay within the documented schema:
+      bounded tree complexity, learning rate/boosting budget, subsampling,
+      regularization, approved class-weight modes, and frozen feature recipes.
+      Do not propose new keys, source-code changes, metric/split/device changes,
+      or arbitrary feature expressions.
+    """
+    input: AnalyzeHistory.analysis, AnalyzeHistory.direction, StartTrial.best_score
+    requires: fs.read
+    output: {
+      patch_description: string
+    }
+  }
+
+  stage ApplyCandidate {
+    prompt: """
+      Apply the proposed change to candidate.json only. Preserve valid JSON and
+      the schema version. Read the file before writing it, then read it again
+      and verify the intended semantic change. Do not write any other path.
+    """
+    input: ProposeCandidate.patch_description
+    requires: fs.read, fs.write
+    output: {
+      applied: bool
+      summary: string
+    }
+  }
+
+  stage Preflight {
+    exec: os.shell(command: "python harness/preflight.py")
+    output: {
+      ok: bool
+      candidate_hash: string
+      report: string
+      log: string
+    }
+    transition if ok => TrainCandidate
+    transition else => RepairGate
+  }
+
+  // The trusted state manager bounds repair attempts before returning to the LLM.
+  stage RepairGate {
+    exec: os.shell(command: "python harness/state.py repair-gate")
+    output: {
+      ok: bool
+      repair_allowed: bool { true => RepairCandidate false => RejectCandidate }
+      report: string
+    }
+  }
+
+  stage RepairCandidate {
+    prompt: """
+      The frozen preflight rejected candidate.json. Use the supplied report/log
+      to repair candidate.json only. Keep the repair minimal and schema-valid;
+      do not alter the evaluator or attempt to bypass checks.
+    """
+    input: Preflight.log, Preflight.report, RepairGate.report
+    requires: fs.read, fs.write
+    output: {
+      summary: string
+    }
+    transition else => Preflight
+  }
+
+  stage TrainCandidate {
+    exec: os.shell(command: "python harness/train.py")
+    output: {
+      ok: bool
+      report: string
+      log: string
+    }
+    transition if ok => EvaluateSelection
+    transition else => RejectCandidate
+  }
+
+  stage EvaluateSelection {
+    exec: os.shell(command: "python harness/evaluate.py --split selection --model current")
+    output: {
+      ok: bool
+      score: number
+      metrics: string
+      report: string
+    }
+    transition if ok => JudgePrimary
+    transition else => RejectCandidate
+  }
+
+  // Any positive primary result is confirmed; failure and non-improvement fail closed.
+  stage JudgePrimary {
+    exec: os.shell(command: "python harness/state.py judge-primary")
+    output: {
+      ok: bool
+      score: number
+      best_score: number
+      selection_score: number
+      report: string
+    }
+    transition if not ok => RejectCandidate
+    transition if score > best_score => ConfirmCandidate
+    transition else => RejectCandidate
+  }
+
+  stage ConfirmCandidate {
+    exec: os.shell(command: "python harness/evaluate.py --split confirmation --model current")
+    output: {
+      ok: bool
+      score: number
+      metrics: string
+      report: string
+    }
+    transition if ok => JudgeConfirmed
+    transition else => RejectCandidate
+  }
+
+  // The compiler, rather than the LLM or state script, makes the epsilon decision.
+  stage JudgeConfirmed {
+    exec: os.shell(command: "python harness/state.py judge-confirm")
+    output: {
+      ok: bool
+      score: number
+      best_score: number
+      selection_score: number
+      confirmation_score: number
+      report: string
+    }
+    transition if not ok => RejectCandidate
+    transition if score - best_score > eps => AcceptCandidate
+    transition else => RejectCandidate
+  }
+
+  stage AcceptCandidate {
+    exec: os.shell(command: "python harness/state.py accept")
+    output: {
+      ok: bool
+      state_json: string
+      trial_count: number
+      score: number
+      best_score: number
+      selection_score: number
+      confirmation_score: number
+      report: string
+    }
+    transition else => CheckBudget
+  }
+
+  stage RejectCandidate {
+    exec: os.shell(command: "python harness/state.py reject")
+    output: {
+      ok: bool
+      state_json: string
+      trial_count: number
+      score: number
+      best_score: number
+      report: string
+    }
+    transition else => CheckBudget
+  }
+
+  stage CheckBudget {
+    exec: os.shell(command: "python harness/state.py should-continue")
+    output: {
+      ok: bool
+      continue_search: bool { true => StartTrial false => FinalEval }
+      state_json: string
+      trial_count: number
+      best_score: number
+      report: string
+    }
+  }
+
+  // Final-test labels are accessed only here, after the loop has terminated.
+  stage FinalEval {
+    exec: os.shell(command: "python harness/final_eval.py")
+    output: {
+      ok: bool
+      score: number?
+      metrics: string
+      report: string
+    }
+  }
+
+  stage@exit FinalReport {
+    prompt: """
+      Produce an auditable final report from the supplied deterministic facts.
+      Distinguish the harness measurements from your interpretation. State the
+      baseline and final-incumbent validation/test results, validation-to-test
+      gap, trial budget and accepted/rejected trajectory, and evidence locations.
+      If initialization or baseline failed, explain that no valid search result
+      was produced. Do not claim ecological, medical, or AutoML superiority.
+    """
+    input: Init.report?,
+           Baseline.report?,
+           AdoptBaseline.report?,
+           StartTrial.trial_count?,
+           AcceptCandidate.report?,
+           RejectCandidate.report?,
+           CheckBudget.report?,
+           FinalEval.report,
+           FinalEval.metrics
+    output: {
+      summary: string
+    }
+  }
+}

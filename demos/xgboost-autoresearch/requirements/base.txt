@@ -1,0 +1,14 @@
+# NemoIR xgboost-autoresearch demo — dependency bounds.
+# Install: pip install -r requirements/base.txt
+# These bounds target Python >=3.11 and are not pinned to exact versions
+# to allow flexibility within compatible ranges. Tested with Python 3.11–3.14.
+
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+xgboost>=2.0,<4
+nemoir-runtime>=0.9,<1
+python-dotenv>=1.0,<2
+pytest>=8,<10
+
+# Optional: for faster lock-file resolution
+# pip-tools>=7,<8

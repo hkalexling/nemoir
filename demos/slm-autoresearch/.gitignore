@@ -1,0 +1,26 @@
+# secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Generated runtime artifacts
+adapter/
+adapter_latest/
+adapter_best/
+checkpoints/
+trial_log.jsonl
+last_trial.json
+best_score.txt
+results.json
+decision.json
+
+# Generated artifacts (from nemo compile)
+autoresearch/
+pyproject.toml
+autoresearch.html
+
+# Archives
+*.zip

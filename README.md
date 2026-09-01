@@ -45,6 +45,16 @@ Curated workflow examples live in [`examples/`](examples/):
 - [`web-hint-tutor`](examples/web-hint-tutor/) — a browser-compatible workflow
   that demonstrates conditional transitions and user elicitation.
 
+## Demos
+
+Full applications built with NemoIR — see [`demos/`](demos/) for the curated set. Each demo ships a `*.nemo` workflow, its harness/runtime, and a pre-rendered notebook where applicable so you can view a complete run on GitHub without installing anything:
+
+- [`web-interview-tutor`](demos/web-interview-tutor/) — browser-only interview tutor (`web` target, sandboxed evaluator, optional local WebLLM) — **live:** [nemoir-web-interview-tutor.pages.dev](https://nemoir-web-interview-tutor.pages.dev/) ([GitHub Pages fallback](https://hkalexling.github.io/nemoir-web-interview-tutor/))
+- [`xgboost-autoresearch`](demos/xgboost-autoresearch/) — bounded Covertype XGBoost search (declarative `candidate.json`, 32-trial trace + 5-figure dashboard in `demo.ipynb`)
+- [`slm-autoresearch`](demos/slm-autoresearch/) — MNLI LoRA post-training loop (`candidate.py` only writable, 25-trial `demo.ipynb`)
+
+`examples/` are single-file toys for learning the DSL; `demos/` are executable research systems with policies and auditable traces.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)

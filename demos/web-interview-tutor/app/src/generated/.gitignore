@@ -1,0 +1,25 @@
+# Compiler output is read-only. This standalone repository commits only the
+# narrow generated facade/worker set required to build the static demo on
+# GitHub Pages without access to the private compiler repository.
+#
+# Regenerate with NEMOIR_COMPILER_MANIFEST=/path/to/nemoir/compiler/Cargo.toml
+# npm run compile:workflows, review the resulting tracked artifact changes, and
+# never hand-edit them.
+*
+!.gitignore
+
+!interview-test-runner/
+interview-test-runner/*
+!interview-test-runner/src/
+interview-test-runner/src/*
+!interview-test-runner/src/agent.ts
+!interview-test-runner/src/workflow.json
+
+!interview-tutor/
+interview-tutor/*
+!interview-tutor/src/
+interview-tutor/src/*
+!interview-tutor/src/agent.ts
+!interview-tutor/src/workflow.json
+!interview-tutor/src/webllm.worker.ts
+!interview-tutor/src/js.worker.ts

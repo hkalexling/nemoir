@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "candidate_id": "baseline-frozen",
+  "feature_recipe": "terrain_v1",
+  "n_estimators": 1000,
+  "max_depth": 12,
+  "learning_rate": 0.05,
+  "subsample": 0.8,
+  "colsample_bytree": 0.8,
+  "colsample_bylevel": 1.0,
+  "colsample_bynode": 1.0,
+  "reg_alpha": 0.0,
+  "reg_lambda": 1.0,
+  "gamma": 0.0,
+  "min_child_weight": 1.0,
+  "max_bin": 256,
+  "grow_policy": "depthwise",
+  "early_stopping_rounds": 50,
+  "class_weight_mode": "none",
+  "max_delta_step": 0.0
+}

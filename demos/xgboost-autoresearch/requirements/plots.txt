@@ -1,0 +1,4 @@
+# Optional dependencies for the inline post-run visualization dashboard.
+# Install after the core demo dependencies:
+#   python -m pip install -r requirements/plots.txt
+matplotlib>=3.8,<4

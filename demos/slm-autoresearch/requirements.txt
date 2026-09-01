@@ -1,0 +1,16 @@
+# SLM Autoresearch — minimal runtime deps.
+# Install: pip install -r requirements.txt
+# For GPU / 8-bit: pip install bitsandbytes
+nemoir-runtime>=0.9,<1
+python-dotenv>=1.0,<2
+# HF stack for harness/train.py + eval.py
+torch>=2.0
+transformers>=4.40
+peft>=0.10
+datasets>=2.18
+accelerate>=0.28
+evaluate>=0.4
+scikit-learn>=1.4
+numpy>=1.26,<3
+# Optional, faster LoRA training:
+# bitsandbytes>=0.43

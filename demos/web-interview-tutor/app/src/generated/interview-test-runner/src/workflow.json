@@ -1,0 +1,100 @@
+{
+  "ir_version": "0.1",
+  "kind": "workflow_ir",
+  "source": {
+    "frontend": "nemo_dsl",
+    "file": "/tmp/nemoir-web-interview-tutor/workflows/interview_test_runner.nemo"
+  },
+  "workflow": {
+    "id": "InterviewTestRunner",
+    "entry": "ExecuteAttempt",
+    "exits": [
+      "ExecuteAttempt"
+    ],
+    "transition_semantics": {
+      "selection": "first_match_by_priority",
+      "no_match": "error_unless_exit"
+    }
+  },
+  "inputs": [
+    {
+      "id": "attempt_bundle",
+      "type": "json"
+    }
+  ],
+  "capabilities": [
+    "browser.js.sandbox",
+    "user.confirm"
+  ],
+  "policies": [
+    {
+      "id": "before browser.js.sandbox(code) requires user.confirm",
+      "kind": "before",
+      "trigger": {
+        "capability": "browser.js.sandbox",
+        "bind": {
+          "code": {
+            "kind": "arg",
+            "name": "code"
+          }
+        }
+      },
+      "requires": [
+        {
+          "capability": "user.confirm"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "ExecuteAttempt",
+      "annotations": [
+        "entry",
+        "exit"
+      ],
+      "prompt": "",
+      "reads": [
+        {
+          "ref": {
+            "kind": "input",
+            "name": "attempt_bundle"
+          },
+          "optional": false,
+          "origin": "implicit_entry_input"
+        }
+      ],
+      "writes": [
+        {
+          "name": "report",
+          "type": "json",
+          "optional": false
+        }
+      ],
+      "requires": [
+        {
+          "capability": "browser.js.sandbox"
+        }
+      ],
+      "transitions": [],
+      "execution": {
+        "kind": "tool",
+        "capability": "browser.js.sandbox",
+        "args": {
+          "code": {
+            "kind": "literal",
+            "type": "string",
+            "value": "\n// Deterministic evaluator harness — learner-code test runner.\n//\n// Runs inside the opaque-origin sandbox (strict mode). Receives `input`\n// as the attempt bundle and returns `{ report: {…} }`.  The outer sandbox\n// handles timeout / uninterruptible-loop termination — this harness never\n// self-reports a timeout status.\n\n// ---------------------------------------------------------------------------\n// Helpers\n// ---------------------------------------------------------------------------\n\nfunction _safeId(n) {\n  // Require a non-empty JS identifier that is not a blocked escape hatch.\n  if (typeof n !== \"string\" || n.length === 0 || n.length > 256) return false;\n  if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(n)) return false;\n  var blocked = [\n    \"constructor\",\"__proto__\",\"prototype\",\"eval\",\"Function\",\n    \"import\",\"importScripts\",\"window\",\"self\",\"globalThis\",\n    \"top\",\"parent\",\"frames\",\"fetch\",\"XMLHttpRequest\",\"WebSocket\",\n    \"document\",\"location\",\"arguments\",\"caller\",\"callee\"\n  ];\n  for (var i = 0; i < blocked.length; i++) {\n    if (n === blocked[i]) return false;\n  }\n  return true;\n}\n\nfunction _isSafe(v, _seen) {\n  // Reject undefined, function, symbol, bigint, NaN, Infinity,\n  // and any object/array tree containing them.  JSON can represent\n  // null, boolean, finite number, string, object, and array.\n  // Only plain objects (Object.prototype or null prototype) are\n  // accepted; Date, Map, Set, class instances, etc. are rejected.\n  // Cycles are detected via an internal WeakSet and rejected.\n  if (v === null) return true;\n  var t = typeof v;\n  if (t === \"number\") return isFinite(v);\n  if (t === \"string\" || t === \"boolean\") return true;\n  if (Array.isArray(v)) {\n    if (!_seen) { try { _seen = new WeakSet(); } catch (_) { return false; } }\n    if (_seen.has(v)) return false;\n    try { _seen.add(v); } catch (_) { return false; }\n    for (var i = 0; i < v.length; i++) { if (!_isSafe(v[i], _seen)) return false; }\n    return true;\n  }\n  if (t === \"object\") {\n    // Defensively reject non-plain objects (Date, Map, class instances).\n    try {\n      var proto = Object.getPrototypeOf(v);\n      if (proto !== null && proto !== Object.prototype) return false;\n    } catch (_) { return false; }\n    if (!_seen) { try { _seen = new WeakSet(); } catch (_) { return false; } }\n    if (_seen.has(v)) return false;\n    try { _seen.add(v); } catch (_) { return false; }\n    var keys;\n    try { keys = Object.keys(v); } catch (_) { return false; }\n    for (var i = 0; i < keys.length; i++) {\n      var val;\n      try { val = v[keys[i]]; } catch (_) { return false; }\n      if (!_isSafe(val, _seen)) return false;\n    }\n    return true;\n  }\n  return false;\n}\n\nfunction _deepEq(a, b) {\n  // Deep structural equality for JSON-compatible values.\n  // Object-key-order independent.  Handles null, primitives, arrays, objects.\n  // NaN and Infinity are already rejected by _isSafe for both expected and\n  // actual values, so we do not special-case them here.\n  if (a === b) return true;\n  if (a === null || b === null) return false;\n  if (typeof a !== typeof b) return false;\n  if (Array.isArray(a) && Array.isArray(b)) {\n    if (a.length !== b.length) return false;\n    for (var i = 0; i < a.length; i++) { if (!_deepEq(a[i], b[i])) return false; }\n    return true;\n  }\n  if (Array.isArray(a) !== Array.isArray(b)) return false;\n  if (typeof a === \"object\") {\n    var ka = Object.keys(a).sort();\n    var kb = Object.keys(b).sort();\n    if (ka.length !== kb.length) return false;\n    for (var i = 0; i < ka.length; i++) {\n      if (ka[i] !== kb[i]) return false;\n      if (!_deepEq(a[ka[i]], b[kb[i]])) return false;\n    }\n    return true;\n  }\n  return false;\n}\n\nfunction _mkReport(status, total, passed, elapsed, firstFailure) {\n  var r = {\n    status: status,\n    total: total,\n    passed: passed,\n    elapsedMs: elapsed,\n    evaluatorVersion: _ev\n  };\n  if (firstFailure) r.firstFailure = firstFailure;\n  return r;\n}\n\nfunction _trim(s, max) {\n  s = String(s);\n  return s.length > max ? s.slice(0, max) : s;\n}\n\nfunction _deepClone(v) {\n  // Deep-clone a JSON-safe value so learner code cannot mutate test data.\n  // Input is already validated by _isSafe (cycle-free, plain objects/arrays\n  // only, finite primitives), so JSON round-trip is safe and idempotent.\n  return JSON.parse(JSON.stringify(v));\n}\n\n// ---------------------------------------------------------------------------\n// Main\n// ---------------------------------------------------------------------------\n\nvar _ev = (input && typeof input.evaluatorVersion === \"string\")\n  ? input.evaluatorVersion\n  : \"unknown\";\n\nvar _t0 = performance.now();\n\n// --- Validate outer attempt bundle shape ---\n\nif (!input || typeof input !== \"object\") {\n  return {\n    report: _mkReport(\"runtime_error\", 0, 0, 0, {\n      testId: \"attempt\", args: [], expected: null,\n      error: \"Invalid attempt bundle: must be an object\"\n    })\n  };\n}\n\nvar source = input.source;\nvar entryFunctionName = input.entryFunctionName;\nvar tests = input.tests;\n\nif (typeof source !== \"string\" || source.length === 0) {\n  return {\n    report: _mkReport(\"runtime_error\", 0, 0, 0, {\n      testId: \"attempt\", args: [], expected: null,\n      error: \"Invalid attempt bundle: source must be a non-empty string\"\n    })\n  };\n}\n\nif (!_safeId(entryFunctionName)) {\n  return {\n    report: _mkReport(\"runtime_error\", 0, 0, 0, {\n      testId: \"attempt\", args: [], expected: null,\n      error: \"Invalid entry function name: \" + _trim(entryFunctionName, 100)\n    })\n  };\n}\n\nif (!Array.isArray(tests) || tests.length === 0) {\n  return {\n    report: _mkReport(\"runtime_error\", 0, 0, 0, {\n      testId: \"attempt\", args: [], expected: null,\n      error: \"Invalid attempt bundle: tests must be a non-empty array\"\n    })\n  };\n}\n\n// --- Validate every test case ---\n\nfor (var _ti = 0; _ti < tests.length; _ti++) {\n  var _t = tests[_ti];\n  if (!_t || typeof _t !== \"object\") {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, 0, 0, {\n        testId: String(_ti), args: [], expected: null,\n        error: \"Invalid test case at index \" + _ti + \": must be an object\"\n      })\n    };\n  }\n  if (!(\"id\" in _t) || (typeof _t.id !== \"string\" && typeof _t.id !== \"number\")) {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, 0, 0, {\n        testId: String(_ti), args: [], expected: null,\n        error: \"Invalid test case at index \" + _ti + \": missing or invalid id\"\n      })\n    };\n  }\n  if (!Array.isArray(_t.args)) {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, 0, 0, {\n        testId: String(_t.id), args: [], expected: null,\n        error: \"Test '\" + _trim(_t.id, 80) + \"': args must be an array\"\n      })\n    };\n  }\n  if (!_isSafe(_t.args)) {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, 0, 0, {\n        testId: String(_t.id), args: [], expected: null,\n        error: \"Test '\" + _trim(_t.id, 80) + \"': args must be JSON-safe\"\n      })\n    };\n  }\n  if (!(\"expected\" in _t) || !_isSafe(_t.expected)) {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, 0, 0, {\n        testId: String(_t.id), args: _t.args.slice(), expected: null,\n        error: \"Test '\" + _trim(_t.id, 80) + \"': expected must be JSON-safe\"\n      })\n    };\n  }\n}\n\n// --- Compile learner source via dynamic evaluation (only inside sandbox) ---\n\nvar _fnFactory;\ntry {\n  // new Function compiles the learner source into a factory body whose\n  // last statement is `return <entryFunctionName>`.  If the source has\n  // syntax errors, the constructor throws — that is a syntax_error.\n  _fnFactory = new Function(\n    '\"use strict\";\\n' + source + '\\n; return ' + entryFunctionName + ';'\n  );\n} catch (_se) {\n  return {\n    report: _mkReport(\"syntax_error\", tests.length, 0,\n      Math.round(performance.now() - _t0), {\n        testId: \"source\", args: [], expected: null,\n        error: \"Syntax error: \" + _trim(_se.message || _se, 500)\n      })\n  };\n}\n\n// --- Execute top-level learner source; resolve entry ---\n// Errors during factory execution (e.g. referencing undeclared globals)\n// are runtime_errors, not syntax_errors.\n\nvar _fn;\ntry {\n  _fn = _fnFactory();\n} catch (_re) {\n  return {\n    report: _mkReport(\"runtime_error\", tests.length, 0,\n      Math.round(performance.now() - _t0), {\n        testId: \"source\", args: [], expected: null,\n        error: \"Runtime error executing source: \" + _trim(_re.message || _re, 500)\n      })\n  };\n}\n\nif (typeof _fn !== \"function\") {\n  return {\n    report: _mkReport(\"runtime_error\", tests.length, 0,\n      Math.round(performance.now() - _t0), {\n        testId: \"source\", args: [], expected: null,\n        error: \"Entry '\" + _trim(entryFunctionName, 100) +\n          \"' resolved to \" + typeof _fn + \", not a function\"\n      })\n  };\n}\n\n// --- Run tests sequentially; stop at first failure ---\n\nvar _passed = 0;\nfor (var _ti2 = 0; _ti2 < tests.length; _ti2++) {\n  var _tc = tests[_ti2];\n  var _id = String(_tc.id);\n  var _args = _deepClone(_tc.args);  // deep-clone so learner cannot mutate test data\n  var _expected = _tc.expected;\n\n  try {\n    var _result = _fn.apply(null, _args);\n    // Await if the entry returned a promise (async learner functions).\n    if (_result && typeof _result.then === \"function\") {\n      _result = await _result;\n    }\n\n    // Reject non-JSON-safe learner output before comparison.\n    if (!_isSafe(_result)) {\n      return {\n        report: _mkReport(\"runtime_error\", tests.length, _passed,\n          Math.round(performance.now() - _t0), {\n            testId: _id, args: _args, expected: _expected,\n            error: \"Function returned a non-JSON-safe value\"\n          })\n      };\n    }\n\n    if (!_deepEq(_result, _expected)) {\n      return {\n        report: _mkReport(\"failed\", tests.length, _passed,\n          Math.round(performance.now() - _t0), {\n            testId: _id, args: _args, expected: _expected,\n            actual: _result,\n            error: \"Assertion mismatch: expected value does not match actual\"\n          })\n      };\n    }\n\n    _passed++;\n  } catch (_re) {\n    return {\n      report: _mkReport(\"runtime_error\", tests.length, _passed,\n        Math.round(performance.now() - _t0), {\n          testId: _id, args: _args, expected: _expected,\n          error: \"Runtime error: \" + _trim(_re.message || _re, 500)\n        })\n    };\n  }\n}\n\n// --- All tests passed ---\n\nreturn {\n  report: _mkReport(\"passed\", tests.length, _passed,\n    Math.round(performance.now() - _t0))\n};\n"
+          },
+          "input": {
+            "kind": "ref",
+            "ref": {
+              "kind": "input",
+              "name": "attempt_bundle"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
