@@ -26,14 +26,6 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) — capability policies and a Python-oriented workflow.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) — conditional transitions, optional data flow, and a web-compatible user interaction.
 
-## Demos (full apps)
-
-- [`../demos/web-interview-tutor/`](../demos/web-interview-tutor/) — browser interview tutor (`web` target, sandboxed evaluator, optional WebLLM).
-- [`../demos/xgboost-autoresearch/`](../demos/xgboost-autoresearch/) — bounded Covertype XGBoost search (pre-rendered `demo.ipynb` + 5-figure dashboard).
-- [`../demos/slm-autoresearch/`](../demos/slm-autoresearch/) — MNLI LoRA loop (pre-rendered 25-trial `demo.ipynb`).
-
-`examples/` are toys for the DSL; `demos/` are executable systems with harnesses, policies, and notebook viewers. See [`../demos/README.md`](../demos/README.md).
-
 ## Scope and ownership
 
 - [`../README.md`](../README.md) stays short and points here for user-facing compiler documentation.

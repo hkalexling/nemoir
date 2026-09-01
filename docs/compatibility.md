@@ -22,7 +22,7 @@ versa.
 | --- | --- | --- |
 | `none` | No artifact | Useful for lowering and optional IR dumping only. |
 | `visualizer` | Standalone HTML file | No separate NemoIR runtime package is required for the generated HTML artifact. |
-| `python` | Python package | Generated `pyproject.toml` currently requires Python `>=3.11` and [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) `>=0.9.4`. |
+| `python` | Python package | Generated `pyproject.toml` currently requires Python `>=3.11` and [`nemoir-runtime`](https://github.com/hkalexling/nemoir-python-runtime) `>=0.10.0`. |
 | `web` | Vite/TypeScript app | Generated `package.json` currently uses [`@nemoir/web-runtime`](https://github.com/hkalexling/nemoir-web-runtime) `^0.5.0` and [`@nemoir/web-ui`](https://github.com/hkalexling/nemoir-web-ui) `^0.3.0` by default. |
 
 ## Web target compatibility
@@ -43,18 +43,13 @@ It rejects workflows that require unsupported capabilities such as `fs.read`, `f
 
 `browser.js.run` and `browser.js.sandbox` are deterministic-stage-only capabilities on the web target. In addition, `browser.js.sandbox` requires an explicit approval policy of the form `before browser.js.sandbox(code) requires user.confirm`.
 
-## Example- and demo-level guidance
+## Example-level guidance
 
 The public examples reflect current target intent:
 
 - [`../examples/hello-workflow/`](../examples/hello-workflow/) is suitable for `visualizer`, `python`, and `web`. It ships both `hello.nemo` and the equivalent `hello.visual.json` visual document.
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) is Python-oriented and not web-compatible because it uses `path`, `fs.read`, and `fs.write`.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) is web-compatible and also serves as a good frontend validation example.
-
-The public demos extend that coverage:
-
-- [`../demos/web-interview-tutor/`](../demos/web-interview-tutor/) — `web` target (`browser.js.sandbox` with mandatory `before browser.js.sandbox(code) requires user.confirm`, `browser.js.run`, `browser.storage`).
-- [`../demos/xgboost-autoresearch/`](../demos/xgboost-autoresearch/) and [`../demos/slm-autoresearch/`](../demos/slm-autoresearch/) — `python` target (`fs.read/write`, `os.shell` literal allowlist, compiled `score - best > eps`).
 
 ## Documentation boundary
 
