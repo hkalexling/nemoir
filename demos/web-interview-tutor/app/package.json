@@ -17,7 +17,7 @@
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.84",
     "@monaco-editor/react": "^4.7.0",
-    "@nemoir/compiler-wasm": "^0.1.7",
+    "@nemoir/compiler-wasm": "^0.1.8",
     "@nemoir/web-runtime": "^0.5.0",
     "@nemoir/web-ui": "^0.3.0",
     "monaco-editor": "^0.56.0",
