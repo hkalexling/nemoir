@@ -26,6 +26,10 @@ NemoIR is a research compiler for structured agent workflows. This documentation
 - [`../examples/policy-gated-edit/`](../examples/policy-gated-edit/) — capability policies and a Python-oriented workflow.
 - [`../examples/web-hint-tutor/`](../examples/web-hint-tutor/) — conditional transitions, optional data flow, and a web-compatible user interaction.
 
+## Project overview
+
+- [Project slides](slides/NemobotIR.pdf) — 8-page overview of the NemobotIR compiler stack: workflow frontend, Agent Workflow IR, optimization passes, and runtime backends.
+
 ## Scope and ownership
 
 - [`../README.md`](../README.md) stays short and points here for user-facing compiler documentation.
