@@ -58,6 +58,7 @@ Full applications built with NemoIR — see [`demos/`](demos/) for the curated s
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
+- [Project slides](docs/slides/NemobotIR.pdf)
 - [DSL and IR reference](docs/dsl-and-ir.md)
 - [Visual frontend](docs/visual-frontend.md)
 - [Writing workflows](docs/writing-workflows.md)
