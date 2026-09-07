@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import os
 import sys
+import uuid
 from pathlib import Path
 from datetime import UTC, datetime
 import dataclasses
@@ -39,6 +40,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=512, help="workflow runtime step cap")
     parser.add_argument("--max-model-retries", type=int, default=8)
     parser.add_argument("--max-tool-rounds", type=int, default=16)
+    parser.add_argument(
+        "--extra-headers",
+        type=str,
+        default=None,
+        help="JSON object of extra HTTP headers to pass to the model provider "
+             "(e.g. '{\"x-opencode-session\": \"abc\"}'); "
+             "also reads NEMOIR_EXTRA_HEADERS env var if not given",
+    )
     return parser
 
 
@@ -125,6 +134,30 @@ async def main() -> None:
     model: dict[str, Any] = {"name": args.model, "temperature": 0.3, "api_key": key}
     if args.api_base:
         model["api_base"] = args.api_base
+    # Optional extra HTTP headers (provider-agnostic, e.g. opencode Go session).
+    _extra_headers_raw = args.extra_headers or os.environ.get("NEMOIR_EXTRA_HEADERS")
+    if _extra_headers_raw:
+        try:
+            _extra = json.loads(_extra_headers_raw)
+            if isinstance(_extra, dict):
+                model["extra_headers"] = _extra
+            else:
+                print(f"warning: NEMOIR_EXTRA_HEADERS/--extra-headers is not a JSON object: {_extra_headers_raw}", file=sys.stderr)
+        except json.JSONDecodeError as exc:
+            print(f"warning: failed to parse NEMOIR_EXTRA_HEADERS/--extra-headers as JSON: {exc}", file=sys.stderr)
+    # Per-run fallback for opencode Go: stable per run_dir, isolated across runs.
+    if "extra_headers" not in model:
+        _go_base = str(model.get("api_base") or args.api_base or os.environ.get("NEMOIR_API_BASE") or os.environ.get("OPENAI_API_BASE") or "")
+        if "opencode.ai/zen/go" in _go_base:
+            # run_dir may be relative; resolve for stable name. Default "runs/current" is not unique,
+            # so generate a per-invocation id for that case.
+            _run_dir_name = Path(args.run_dir).name if args.run_dir else Path("runs/current").name
+            _resolved = os.environ.get("NEMOIR_RUN_DIR", "")
+            if _resolved:
+                _run_dir_name = Path(_resolved).name
+            if not _run_dir_name or _run_dir_name == "current":
+                _run_dir_name = f"slm-{args.profile}-" + uuid.uuid4().hex[:8]
+            model["extra_headers"] = {"x-opencode-session": _run_dir_name}
 
     tools = ToolRegistry([read_file, write_file, edit_file, run_harness, run_eval, run_state])
 

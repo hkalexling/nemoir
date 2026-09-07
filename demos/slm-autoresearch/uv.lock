@@ -182,7 +182,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "nemoir-runtime", specifier = ">=0.10.0" }]
+requires-dist = [{ name = "nemoir-runtime", specifier = ">=0.10.1" }]
 
 [[package]]
 name = "boto3"
@@ -1030,15 +1030,15 @@ wheels = [
 
 [[package]]
 name = "nemoir-runtime"
-version = "0.10.0"
+version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "litellm" },
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/ff/3439a342df48d234560e4b79be2ca984b9475d083a33ce09f07e6b0d3ad7/nemoir_runtime-0.10.0.tar.gz", hash = "sha256:3fd8a5360a3f01986f041556fcd6b00a345e7f41d7f3b536f8523e678a5738b3", size = 89087, upload-time = "2026-09-01T15:44:13.535Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/9e/06af776d193b82b5139abbf94b5b37f8664b65d42be886eece287ffe9e69/nemoir_runtime-0.10.1.tar.gz", hash = "sha256:e2f3a2b8fe462fbe6f1eecbb21063ae42ee234a1bca2cb6b778ac7aaee00bf2d", size = 89323, upload-time = "2026-09-07T08:29:25.152Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/a9/f3299a4ab152083746feefe9589088a000e2a3d7ea85be98504e55eb3f95/nemoir_runtime-0.10.0-py3-none-any.whl", hash = "sha256:0554f4a7bfc97253da31f83c306d6f20b2aff8c36a38265064eb8d5deec33fe8", size = 41184, upload-time = "2026-09-01T15:44:12.383Z" },
+    { url = "https://files.pythonhosted.org/packages/63/68/909aab5d2974b66dacc8679f41a2947fb8da3fd962056258d5cc9c80fb08/nemoir_runtime-0.10.1-py3-none-any.whl", hash = "sha256:59add6ea06b60326998034446b6b6984108c86acb614d3ac936c526bb785733f", size = 41434, upload-time = "2026-09-07T08:29:23.882Z" },
 ]
 
 [[package]]

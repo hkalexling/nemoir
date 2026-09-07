@@ -41,6 +41,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=512)
     parser.add_argument("--max-model-retries", type=int, default=4)
     parser.add_argument("--max-tool-rounds", type=int, default=16)
+    parser.add_argument(
+        "--extra-headers",
+        type=str,
+        default=None,
+        help="JSON object of extra HTTP headers to pass to the model provider "
+             "(e.g. '{\"x-opencode-session\": \"abc\"}'); "
+             "also reads NEMOIR_EXTRA_HEADERS env var if not given",
+    )
     return parser
 
 
@@ -181,6 +189,22 @@ async def _run(args: argparse.Namespace, *, run_dir: Path, api_key: str) -> int:
     model: dict[str, Any] = {"name": args.model, "temperature": 0.2, "api_key": api_key}
     if args.api_base:
         model["api_base"] = args.api_base
+    # Optional extra HTTP headers (provider-agnostic, e.g. opencode Go session).
+    _extra_headers_raw = args.extra_headers or os.environ.get("NEMOIR_EXTRA_HEADERS")
+    if _extra_headers_raw:
+        try:
+            _extra = json.loads(_extra_headers_raw)
+            if isinstance(_extra, dict):
+                model["extra_headers"] = _extra
+            else:
+                print(f"warning: NEMOIR_EXTRA_HEADERS/--extra-headers is not a JSON object: {_extra_headers_raw}", file=sys.stderr)
+        except json.JSONDecodeError as exc:
+            print(f"warning: failed to parse NEMOIR_EXTRA_HEADERS/--extra-headers as JSON: {exc}", file=sys.stderr)
+    # Per-run fallback for opencode Go: stable per run_dir, isolated across runs.
+    if "extra_headers" not in model:
+        _go_base = str(model.get("api_base") or args.api_base or os.environ.get("NEMOIR_API_BASE") or os.environ.get("OPENAI_API_BASE") or "")
+        if "opencode.ai/zen/go" in _go_base:
+            model["extra_headers"] = {"x-opencode-session": run_dir.name}
     # Provider reasoning is suppressed from output; only assistant text streams.
     model["reasoning"] = "none"
 
